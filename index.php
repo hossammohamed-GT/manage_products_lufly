@@ -126,7 +126,7 @@ try {
 // HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════
 
-function layout(string $title, string $content, array $groups = [], string $extraJs = '', string $action = ''): void
+function layout(string $title, string $content, array $groups = [], string $extraJs = '', string $action = 'home'): void
 {
     require_once __DIR__.'/includes/sidebar.php';
     $d = db();
@@ -891,7 +891,7 @@ function showHome(int $page): void {
     <?php renderProducts($paged, $page, $totalPages, '?action=home&status='.urlencode($statusFilter).'&sort='.urlencode($sortBy)); ?>
     <?php
     
-    layout('الرئيسية', ob_get_clean(), $groups, '', $action);
+    layout('الرئيسية', ob_get_clean(), $groups, '', (string)($action ?? 'home'));
 }
 
 // ─── GROUP VIEW ────────────────────────────────────────────
@@ -932,7 +932,7 @@ function showGroup(string $prefix, int $page): void {
     <?php
     
     $groups = getGroups($d);
-    layout('مجموعة '.$prefix, ob_get_clean(), $groups, '', $action);
+    layout('مجموعة '.$prefix, ob_get_clean(), $groups, '', (string)($action ?? 'home'));
 }
 
 // ─── SEARCH ────────────────────────────────────────────────
@@ -960,7 +960,7 @@ function showSearch(string $q, int $page): void {
     <?php
     
     $groups = getGroups($d);
-    layout('بحث: '.$q, ob_get_clean(), $groups, '', $action);
+    layout('بحث: '.$q, ob_get_clean(), $groups, '', (string)($action ?? 'home'));
 }
 
 // ─── VIEW PRODUCT ──────────────────────────────────────────
@@ -1031,7 +1031,7 @@ function showProduct(int $id): void {
     <?php
     
     $groups = getGroups($d);
-    layout($product['code'], ob_get_clean(), $groups, '', $action);
+    layout($product['code'], ob_get_clean(), $groups, '', (string)($action ?? 'home'));
 }
 
 // ── EDIT/ADD ──────────────────────────────────────────────
@@ -1091,7 +1091,7 @@ function editProduct(int $id): void {
     </div>
     <?php
     
-    layout($id ? 'تعديل: '.$product['code'] : 'إضافة منتج', ob_get_clean(), [], '', $action);
+    layout($id ? 'تعديل: '.$product['code'] : 'إضافة منتج', ob_get_clean(), [], '', (string)($action ?? 'home'));
 }
 
 // ─── ARCHIVE LIST ──────────────────────────────────────────
@@ -1124,7 +1124,7 @@ function showArchive(int $page): void {
         }
     }
     $groups = getGroups($d);
-    layout('الأرشيف', ob_get_clean(), $groups, '', $action);
+    layout('الأرشيف', ob_get_clean(), $groups, '', (string)($action ?? 'home'));
 }
 
 // ─── SETTINGS ──────────────────────────────────────────────
@@ -1163,14 +1163,14 @@ function showSettings(): void {
     </div>
     <?php
     
-    layout('الإعدادات', ob_get_clean(), [], '', $action);
+    layout('الإعدادات', ob_get_clean(), [], '', (string)($action ?? 'home'));
 }
 
 // ─── ERROR PAGES ───────────────────────────────────────────
 function showError(string $message): void {
     ob_start();
     ?><div class="error-box"><h3>❌ حدث خطأ</h3><p><?= h($message) ?></p><a href="?action=home" class="btn btn-outline" style="margin-top:16px;">العودة للرئيسية</a></div><?php
-    layout('خطأ', ob_get_clean(), [], '', $action);
+    layout('خطأ', ob_get_clean(), [], '', (string)($action ?? 'home'));
 }
 
 function showSetupError(string $message): void {
@@ -1193,5 +1193,5 @@ function showSetupError(string $message): void {
         </div>
     </div>
     <?php
-    layout('خطأ في الإعداد', ob_get_clean(), [], '', $action);
+    layout('خطأ في الإعداد', ob_get_clean(), [], '', (string)($action ?? 'home'));
 }
