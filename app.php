@@ -64,11 +64,13 @@ function install(): void {
   $db->exec('CREATE DATABASE IF NOT EXISTS `'.$config['database'].'` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'); $db=db();
   $sql=file_get_contents(__DIR__.'/database/schema.sql');
   foreach(explode(';',$sql) as $part) if(trim($part)!=='' && !preg_match('/^\s*(CREATE DATABASE|USE )/i',$part)) $db->exec($part);
+  // Ensure verified column exists (for existing databases)
+  try { $db->exec('ALTER TABLE products ADD COLUMN verified INT NOT NULL DEFAULT 0'); } catch (Throwable $e) {}
  } else {
   // Ensure SQLite directory exists
   $sqliteDir=dirname($config['sqlite_path']);
   if(!is_dir($sqliteDir))mkdir($sqliteDir,0755,true);
-  $db->exec('CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT,code TEXT NOT NULL DEFAULT "",brand TEXT NOT NULL DEFAULT "lufly",status TEXT NOT NULL DEFAULT "Running",description TEXT NOT NULL,notes TEXT NOT NULL,source_file TEXT NOT NULL DEFAULT "",source_row INTEGER NOT NULL DEFAULT 0,source_extra TEXT NOT NULL,archived INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)');
+  $db->exec('CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT,code TEXT NOT NULL DEFAULT "",brand TEXT NOT NULL DEFAULT "lufly",status TEXT NOT NULL DEFAULT "Running",description TEXT NOT NULL,notes TEXT NOT NULL,source_file TEXT NOT NULL DEFAULT "",source_row INTEGER NOT NULL DEFAULT 0,source_extra TEXT NOT NULL,archived INTEGER NOT NULL DEFAULT 0,verified INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)');
   $db->exec('CREATE TABLE IF NOT EXISTS media (id INTEGER PRIMARY KEY AUTOINCREMENT,product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,path TEXT NOT NULL,original_name TEXT NOT NULL,kind TEXT NOT NULL,caption TEXT NOT NULL DEFAULT "",sort_order INTEGER NOT NULL DEFAULT 0,previewable INTEGER NOT NULL DEFAULT 1,source_column TEXT NOT NULL DEFAULT "",source_row INTEGER NOT NULL DEFAULT 0,sha256 TEXT NOT NULL DEFAULT "")');
   $db->exec('CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY,value TEXT NOT NULL)');
  }
@@ -77,7 +79,7 @@ function install(): void {
   if (setting($db,'installed')==='1' || (int)$db->query('SELECT COUNT(*) FROM products')->fetchColumn()>0) throw new RuntimeException('تم التثبيت بالفعل. لن تتم إعادة استيراد أو استبدال بياناتك.');
   $seed=json_decode(file_get_contents(__DIR__.'/data/catalog.json'),true,512,JSON_THROW_ON_ERROR);
   $now=date('c');
-  foreach($seed['products'] as $p) run($db,'INSERT INTO products (id,code,brand,status,description,notes,source_file,source_row,source_extra,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',[$p['id'],$p['code'],$p['brand'],$p['status'],$p['description'],$p['notes'],$p['source_file'],$p['source_row'],$p['source_extra'],$now,$now]);
+  foreach($seed['products'] as $p) run($db,'INSERT INTO products (id,code,brand,status,description,notes,source_file,source_row,source_extra,verified,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',[$p['id'],$p['code'],$p['brand'],$p['status'],$p['description'],$p['notes'],$p['source_file'],$p['source_row'],$p['source_extra'],0,$now,$now]);
   foreach($seed['media'] as $m) run($db,'INSERT INTO media (id,product_id,path,original_name,kind,caption,sort_order,previewable,source_column,source_row,sha256) VALUES (?,?,?,?,?,?,?,?,?,?,?)',[$m['id'],$m['product_id'],$m['path'],$m['original_name'],$m['kind'],$m['caption'],$m['sort_order'],(int)$m['previewable'],$m['source_column'],$m['source_row'],$m['sha256']]);
   setSetting($db,'installed','1');$db->commit();
  } catch(Throwable $e) { if($db->inTransaction())$db->rollBack();throw $e; }

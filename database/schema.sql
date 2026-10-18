@@ -11,10 +11,11 @@ CREATE TABLE IF NOT EXISTS products (
  source_row INT NOT NULL DEFAULT 0,
  source_extra TEXT NOT NULL,
  archived INT NOT NULL DEFAULT 0,
+ verified INT NOT NULL DEFAULT 0,
  version INT NOT NULL DEFAULT 1,
  created_at VARCHAR(30) NOT NULL,
  updated_at VARCHAR(30) NOT NULL,
- INDEX idx_code (code), INDEX idx_archived (archived)
+ INDEX idx_code (code), INDEX idx_archived (archived), INDEX idx_verified (verified)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS media (
  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,

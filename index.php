@@ -19,6 +19,39 @@ try {
     }
 
     // API endpoints
+    if ($action === 'toggle_verify' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        header('Content-Type: application/json; charset=utf-8');
+        try {
+            checkCsrf();
+            $d = db();
+            $id = (int)($_POST['id'] ?? 0);
+            if (!$id) throw new RuntimeException('معرف المنتج مطلوب');
+            $current = (int)run($d, 'SELECT verified FROM products WHERE id=?', [$id])->fetchColumn();
+            $newVal = $current ? 0 : 1;
+            run($d, 'UPDATE products SET verified=?, version=version+1, updated_at=? WHERE id=?', [$newVal, date('c'), $id]);
+            echo json_encode(['ok'=>true, 'verified'=>$newVal]);
+        } catch (Throwable $e) {
+            http_response_code(400);
+            echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
+        }
+        exit;
+    }
+    if ($action === 'bulk_verify' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        header('Content-Type: application/json; charset=utf-8');
+        try {
+            checkCsrf();
+            $d = db();
+            $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+            if (!is_array($ids) || empty($ids)) throw new RuntimeException('لم يتم تحديد منتجات');
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            run($d, "UPDATE products SET verified=1, version=version+1, updated_at=? WHERE id IN ($placeholders)", array_merge([date('c')], $ids));
+            echo json_encode(['ok'=>true, 'count'=>count($ids)]);
+        } catch (Throwable $e) {
+            http_response_code(400);
+            echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
+        }
+        exit;
+    }
     if ($action === 'api_products' && $_SERVER['REQUEST_METHOD'] === 'GET') {
         header('Content-Type: application/json; charset=utf-8');
         try {
@@ -273,6 +306,84 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     flex-direction: column;
 }
 .product-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
+
+/* Verified state */
+.product-card.verified {
+    border: 2px solid #10b981;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
+}
+.product-card.verified .card-carousel {
+    border-bottom: 2px solid #10b981;
+}
+
+/* Verify check icon */
+.verify-check {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    z-index: 5;
+    font-size: 1.2rem;
+}
+.verify-check:hover {
+    background: white;
+    transform: scale(1.1);
+}
+.verify-check .fa-check-circle { color: #10b981; }
+.verify-check .fa-circle { color: #cbd5e1; }
+.product-card.verified .verify-check {
+    background: #10b981;
+}
+.product-card.verified .verify-check .fa-circle {
+    color: white;
+}
+.product-card.verified .verify-check .fa-circle::before {
+    content: '\f058';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+}
+
+/* Bulk verify bar */
+.bulk-verify-bar {
+    display: none;
+    position: sticky;
+    top: 70px;
+    z-index: 50;
+    background: #10b981;
+    color: white;
+    padding: 12px 20px;
+    border-radius: 12px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+    align-items: center;
+    justify-content: space-between;
+    animation: slideDown 0.3s ease;
+}
+.bulk-verify-bar.active { display: flex; }
+@keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+.bulk-verify-bar .count { font-weight: 700; font-size: 1rem; }
+.bulk-verify-bar .actions { display: flex; gap: 8px; }
+.bulk-verify-bar button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 700;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+}
+.btn-confirm-all { background: white; color: #10b981; }
+.btn-confirm-all:hover { background: #f0fdf4; }
+.btn-clear-selection { background: rgba(255,255,255,0.2); color: white; }
+.btn-clear-selection:hover { background: rgba(255,255,255,0.3); }
 
 /* Card Image Carousel */
 .card-carousel {
@@ -712,6 +823,16 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     <?= $sidebarHtml ?>
     <div class="main-content">
         <?php if ($flash): ?><div class="flash"><?= h($flash) ?></div><?php endif; ?>
+        
+        <!-- Bulk verify bar -->
+        <div class="bulk-verify-bar" id="bulkVerifyBar">
+            <span class="count"><i class="fas fa-check-double"></i> تم تحديد <span id="selectedCount">0</span> منتج</span>
+            <div class="actions">
+                <button class="btn-confirm-all" onclick="bulkVerifySelected()"><i class="fas fa-check"></i> تأكيد الكل</button>
+                <button class="btn-clear-selection" onclick="clearSelection()"><i class="fas fa-times"></i> إلغاء</button>
+            </div>
+        </div>
+        
         <?= $content ?>
     </div>
 </div>
@@ -927,6 +1048,107 @@ document.addEventListener('click', function(e) {
         openLightbox(idx, total, productId, images);
     }
 });
+
+// ═══ VERIFY SYSTEM ═══
+let selectedForVerify = new Set();
+
+window.toggleVerify = function(el, productId) {
+    const card = el.closest('.product-card');
+    const isCurrentlyVerified = card.classList.contains('verified');
+    
+    const fd = new FormData();
+    fd.append('csrf', csrfToken);
+    fd.append('id', productId);
+    
+    fetch('?action=toggle_verify', { method:'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            if (data.verified) {
+                card.classList.add('verified');
+                card.dataset.verified = '1';
+                el.innerHTML = '<i class="fas fa-check-circle verified-icon"></i>';
+            } else {
+                card.classList.remove('verified');
+                card.dataset.verified = '0';
+                el.innerHTML = '<i class="far fa-circle verify-icon"></i>';
+            }
+            updateBulkBar();
+        } else {
+            showToast(data.error || 'خطأ', 'error');
+        }
+    })
+    .catch(() => showToast('خطأ في الاتصال', 'error'));
+};
+
+window.bulkVerifySelected = function() {
+    if (selectedForVerify.size === 0) return;
+    
+    const fd = new FormData();
+    fd.append('csrf', csrfToken);
+    fd.append('ids', JSON.stringify(Array.from(selectedForVerify)));
+    
+    showToast('جاري تأكيد ' + selectedForVerify.size + ' منتج...');
+    
+    fetch('?action=bulk_verify', { method:'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            // Update UI
+            selectedForVerify.forEach(id => {
+                const card = document.querySelector('.product-card[data-id="'+id+'"]');
+                if (card) {
+                    card.classList.add('verified');
+                    card.dataset.verified = '1';
+                    const icon = card.querySelector('.verify-check');
+                    if (icon) icon.innerHTML = '<i class="fas fa-check-circle verified-icon"></i>';
+                }
+            });
+            selectedForVerify.clear();
+            updateBulkBar();
+            showToast('تم تأكيد ' + data.count + ' منتج بنجاح', 'success');
+        } else {
+            showToast(data.error || 'خطأ', 'error');
+        }
+    })
+    .catch(() => showToast('خطأ في الاتصال', 'error'));
+};
+
+window.clearSelection = function() {
+    selectedForVerify.clear();
+    updateBulkBar();
+};
+
+function updateBulkBar() {
+    const bar = document.getElementById('bulkVerifyBar');
+    const count = document.getElementById('selectedCount');
+    if (selectedForVerify.size > 0) {
+        bar.classList.add('active');
+        count.textContent = selectedForVerify.size;
+    } else {
+        bar.classList.remove('active');
+    }
+}
+
+// Allow clicking on card body to toggle selection (not on interactive elements)
+document.addEventListener('click', function(e) {
+    // Don't trigger if clicking on interactive elements
+    if (e.target.closest('.inline-field, .inline-edit-form, .carousel-btn, .upload-btn, .card-btn, .lightbox-trigger, .verify-check')) return;
+    
+    const card = e.target.closest('.product-card');
+    if (!card) return;
+    
+    const id = parseInt(card.dataset.id);
+    if (selectedForVerify.has(id)) {
+        selectedForVerify.delete(id);
+        card.style.outline = '';
+    } else {
+        selectedForVerify.add(id);
+        card.style.outline = '3px solid #10b981';
+        card.style.outlineOffset = '-3px';
+    }
+    updateBulkBar();
+});
 </script>
 <meta name="csrf" content="<?= h(csrf()) ?>">
 </body>
@@ -952,6 +1174,8 @@ function productCardHTML(array $p): string {
     
     $statusClass = str_replace(' ', '-', $p['status']);
     $statusText = ['Running'=>'نشط','New Model'=>'موديل جديد','Slow Moving'=>'بطيء','Aging'=>'قديم'][$p['status']] ?? $p['status'];
+    $isVerified = (int)($p['verified'] ?? 0) === 1;
+    $verifiedClass = $isVerified ? ' verified' : '';
     
     $carouselBtns = count($previewable) > 1 ? '
         <button class="carousel-btn carousel-prev" onclick="event.stopPropagation();carouselPrev(this)"><i class="fas fa-chevron-right"></i></button>
@@ -961,13 +1185,16 @@ function productCardHTML(array $p): string {
     
     $noImage = empty($previewable) ? '<div class="no-image"><i class="far fa-image"></i></div>' : '';
     
-    return '<div class="product-card" data-id="'.$p['id'].'" data-version="'.$p['version'].'">'
+    $verifiedIcon = $isVerified ? '<i class="fas fa-check-circle verified-icon"></i>' : '<i class="far fa-circle verify-icon"></i>';
+    
+    return '<div class="product-card'.$verifiedClass.'" data-id="'.$p['id'].'" data-version="'.$p['version'].'" data-verified="'.($isVerified?'1':'0').'">'
         .'<div class="card-carousel">'
         .'<div class="card-carousel-imgs">'.$carouselImgs.$noImage.'</div>'
         .$carouselBtns
         .'<span class="status-badge '.$statusClass.'">'.$statusText.'</span>'
         .'<span class="code-badge"><i class="fas fa-hashtag"></i> '.h($p['code']?:'—').'</span>'
         .'<span class="media-count"><i class="fas fa-paperclip"></i> '.count($previewable).'</span>'
+        .'<div class="verify-check" onclick="event.stopPropagation();toggleVerify(this,'.$p['id'].')" title="تم التأكد">'.$verifiedIcon.'</div>'
         .'</div>'
         .'<div class="product-card-body">'
         .'<div class="inline-field" onclick="inlineEdit(this,\'code\','.$p['id'].','.$p['version'].')">'
