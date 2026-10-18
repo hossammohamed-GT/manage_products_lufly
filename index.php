@@ -17,11 +17,8 @@ try {
     }
     if ($needsInstall) {
         try { install(); } catch (Throwable $e) {
-            // Maybe DB not created yet, try again
-            try { install(); } catch (Throwable $e2) {
-                $action = 'setup_error';
-                $setupError = $e2->getMessage();
-            }
+            $action = 'setup_error';
+            $setupError = $e->getMessage();
         }
     }
 
@@ -1363,18 +1360,32 @@ function showSetupError(string $message): void
 {
     ob_start();
     ?>
+    <div style="max-width:700px; margin:40px auto; padding:24px;">
     <div class="error-box">
         <div style="font-size:3rem; margin-bottom:16px;">⚠️</div>
-        <h3 style="margin-bottom:8px;">خطأ في الاتصال بقاعدة البيانات</h3>
-        <p><?= h($message) ?></p>
+        <h3 style="margin-bottom:8px;">تعذر الاتصال بقاعدة البيانات</h3>
+        <p style="margin-bottom:16px;"><?= h($message) ?></p>
+        
         <div style="text-align:right; margin-top:20px; padding:16px; background:rgba(0,0,0,0.05); border-radius:8px;">
-            <strong>تأكد من:</strong>
-            <ul style="margin-top:8px; list-style:disc; padding-right:20px;">
-                <li>تشغيل MySQL من XAMPP</li>
-                <li>صحة بيانات الاتصال في config.php</li>
-                <li>وجود database بالاسم المطلوب</li>
-            </ul>
+            <h4 style="margin-bottom:12px;"> خطوات الحل:</h4>
+            <ol style="padding-right:20px; line-height:2;">
+                <li>افتح <strong>XAMPP Control Panel</strong></li>
+                <li>تأكد إن <strong>MySQL</strong> شغال (الأخضر) - لو مش شغال اضغط <strong>Start</strong></li>
+                <li>تأكد إن <strong>Apache</strong> شغال (الأخضر)</li>
+                <li>بعد ما MySQL يشتغل، حدّث الصفحة دي (F5)</li>
+            </ol>
         </div>
+        
+        <div style="margin-top:20px; text-align:center;">
+            <a href="setup.php" class="btn btn-primary" style="display:inline-block; padding:12px 24px; background:var(--primary); color:white; text-decoration:none; border-radius:8px; margin:4px;"> فحص النظام الكامل</a>
+            <a href="?action=home" class="btn btn-outline" style="display:inline-block; padding:12px 24px; text-decoration:none; border-radius:8px; margin:4px;">🔄 حدّث الصفحة</a>
+        </div>
+        
+        <div style="margin-top:20px; padding:16px; background:#fef3c7; border-radius:8px; font-size:0.9rem;">
+            <strong>💡 ملاحظة:</strong> لو الـ setup.php مش شغال كمان، افتحه في المتصفح:
+            <br><code style="background:#fff; padding:4px 8px; border-radius:4px; display:inline-block; margin-top:8px;">http://localhost/manage_products_lufly/setup.php</code>
+        </div>
+    </div>
     </div>
     <?php
     layout('خطأ في الإعداد', ob_get_clean());

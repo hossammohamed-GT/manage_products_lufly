@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 ini_set('session.use_strict_mode', '1');
+ini_set('default_socket_timeout', '3');
+set_time_limit(15);
 session_set_cookie_params(['httponly'=>true, 'samesite'=>'Lax', 'secure'=>!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off']);
 session_start();
 header('X-Content-Type-Options: nosniff');
@@ -22,7 +24,10 @@ function db(bool $serverOnly=false): PDO {
  } else {
   if (!preg_match('/^[a-zA-Z0-9_]+$/',$config['database'])) throw new RuntimeException('اسم قاعدة البيانات غير صالح.');
   $dsn='mysql:host='.$config['host'].';port='.(int)$config['port'].($serverOnly?'':';dbname='.$config['database']).';charset=utf8mb4';
-  $pdo=new PDO($dsn,$config['username'],$config['password']);
+  $pdo=new PDO($dsn,$config['username'],$config['password'],[
+   PDO::ATTR_TIMEOUT => 3,
+   PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
+  ]);
  }
  $pdo->setAttribute(PDO::ATTR_ERRMODE,PDO::ERRMODE_EXCEPTION);
  $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE,PDO::FETCH_ASSOC);
