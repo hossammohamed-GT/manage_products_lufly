@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 ini_set('session.use_strict_mode', '1');
-ini_set('default_socket_timeout', '3');
+ini_set('default_socket_timeout', '2');
 set_time_limit(15);
 session_set_cookie_params(['httponly'=>true, 'samesite'=>'Lax', 'secure'=>!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off']);
 session_start();
@@ -9,6 +9,18 @@ header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
 $config = require __DIR__.'/config.php';
 if (is_file(__DIR__.'/config.local.php')) $config = array_replace($config, require __DIR__.'/config.local.php');
+
+// Auto-detect: if driver is mysql but MySQL is unreachable, silently fall back to SQLite
+if (($config['driver'] ?? 'mysql') === 'mysql') {
+    try {
+        $testPdo = @new PDO('mysql:host=127.0.0.1;port=3306', $config['username'] ?? 'root', $config['password'] ?? '', [PDO::ATTR_TIMEOUT => 2]);
+        $testPdo = null; // MySQL is reachable, keep mysql driver
+    } catch (Throwable $e) {
+        // MySQL not reachable, fall back to SQLite automatically
+        $config['driver'] = 'sqlite';
+        if (empty($config['sqlite_path'])) $config['sqlite_path'] = __DIR__.'/data/lufly.sqlite';
+    }
+}
 const STATUSES = ['Running','New Model','Slow Moving','Aging'];
 function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
 function csrf(): string { if (empty($_SESSION['csrf'])) $_SESSION['csrf']=bin2hex(random_bytes(32)); return $_SESSION['csrf']; }
@@ -53,6 +65,9 @@ function install(): void {
   $sql=file_get_contents(__DIR__.'/database/schema.sql');
   foreach(explode(';',$sql) as $part) if(trim($part)!=='' && !preg_match('/^\s*(CREATE DATABASE|USE )/i',$part)) $db->exec($part);
  } else {
+  // Ensure SQLite directory exists
+  $sqliteDir=dirname($config['sqlite_path']);
+  if(!is_dir($sqliteDir))mkdir($sqliteDir,0755,true);
   $db->exec('CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT,code TEXT NOT NULL DEFAULT "",brand TEXT NOT NULL DEFAULT "lufly",status TEXT NOT NULL DEFAULT "Running",description TEXT NOT NULL,notes TEXT NOT NULL,source_file TEXT NOT NULL DEFAULT "",source_row INTEGER NOT NULL DEFAULT 0,source_extra TEXT NOT NULL,archived INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)');
   $db->exec('CREATE TABLE IF NOT EXISTS media (id INTEGER PRIMARY KEY AUTOINCREMENT,product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,path TEXT NOT NULL,original_name TEXT NOT NULL,kind TEXT NOT NULL,caption TEXT NOT NULL DEFAULT "",sort_order INTEGER NOT NULL DEFAULT 0,previewable INTEGER NOT NULL DEFAULT 1,source_column TEXT NOT NULL DEFAULT "",source_row INTEGER NOT NULL DEFAULT 0,sha256 TEXT NOT NULL DEFAULT "")');
   $db->exec('CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY,value TEXT NOT NULL)');

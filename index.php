@@ -1318,10 +1318,14 @@ function showSettings(): void
                     <div class="detail-label">عدد المرفقات</div>
                     <div class="detail-value"><?= $totalMedia ?></div>
                 </div>
-                <div class="detail-row">
-                    <div class="detail-label">محرك البيانات</div>
-                    <div class="detail-value"><?= h($GLOBALS['config']['driver'] ?? 'mysql') ?></div>
+            <div class="detail-row">
+                <div class="detail-label">محرك البيانات</div>
+                <div class="detail-value"><?= h($GLOBALS['config']['driver'] ?? 'sqlite') ?>
+                <?php if(($GLOBALS['config']['driver'] ?? 'sqlite') === 'sqlite'): ?>
+                 <small style="color:var(--text-muted);">(SQLite - ملف محلي بدون MySQL)</small>
+                <?php endif; ?>
                 </div>
+            </div>
             </div>
             
             <div style="background:var(--card); padding:24px; border-radius:var(--radius); box-shadow:var(--shadow);">
