@@ -5,4 +5,5 @@ return [
     'host' => '127.0.0.1', 'port' => 3306,
     'database' => 'lufly_catalog', 'username' => 'root', 'password' => '',
     'sqlite_path' => __DIR__ . '/data/demo.sqlite',
+    'logo_path' => 'assets/logo.png',
 ];

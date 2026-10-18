@@ -1,5 +1,2 @@
 Options -Indexes
-# Allow access to all files in assets
-<FilesMatch "\.(jpg|jpeg|png|gif|webp|svg|pdf)$">
- Require all granted
-</FilesMatch>
+Require all granted

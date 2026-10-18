@@ -139,8 +139,8 @@ function layout(string $title, string $content, string $extraHead = '', string $
 {
     $d = db();
     $siteTitle = setting($d, 'site_title', 'LUFLY Catalog');
-    $primary = setting($d, 'primary_color', '#1565C0');
-    $secondary = setting($d, 'secondary_color', '#0D47A1');
+    $primary = setting($d, 'primary_color', '#1F9E9E');
+    $secondary = setting($d, 'secondary_color', '#147070');
     $flash = $_SESSION['flash'] ?? '';
     unset($_SESSION['flash']);
     ?>
@@ -155,7 +155,7 @@ function layout(string $title, string $content, string $extraHead = '', string $
     --primary: <?= h($primary) ?>;
     --primary-dark: <?= h($secondary) ?>;
     --primary-light: <?= h($primary) ?>15;
-    --bg: #f5f7fa;
+    --bg: #f0f7f6;
     --card: #ffffff;
     --text: #1a1a2e;
     --text-muted: #6b7280;
@@ -188,7 +188,7 @@ body {
 .header-inner {
     max-width: 1400px;
     margin: 0 auto;
-    padding: 16px 24px;
+    padding: 12px 24px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -202,7 +202,7 @@ body {
     color: white;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
 }
 .logo-icon {
     width: 40px;
@@ -713,8 +713,7 @@ body {
 <div class="header">
     <div class="header-inner">
         <a href="?action=home" class="logo">
-            <span class="logo-icon">L</span>
-            <?= h($siteTitle) ?>
+            <img src="<?= h($config['logo_path'] ?? 'assets/logo.png') ?>" alt="LUFLY" style="height:36px; width:auto;">
         </a>
         <nav class="nav">
             <a href="?action=home" class="<?= $action==='home'?'active':'' ?>">🏠 الرئيسية</a>
@@ -1296,15 +1295,15 @@ function showSettings(): void
                 <div class="form-group">
                     <label class="form-label">اللون الرئيسي</label>
                     <div style="display:flex; gap:8px; align-items:center;">
-                        <input type="color" name="primary_color" value="<?= h(setting($d, 'primary_color', '#1565C0')) ?>" style="width:60px; height:40px; border:none; cursor:pointer;">
-                        <input type="text" name="primary_color_text" class="form-input" value="<?= h(setting($d, 'primary_color', '#1565C0')) ?>" style="flex:1;">
+                        <input type="color" name="primary_color" value="<?= h(setting($d, 'primary_color', '#1F9E9E')) ?>" style="width:60px; height:40px; border:none; cursor:pointer;">
+                        <input type="text" name="primary_color_text" class="form-input" value="<?= h(setting($d, 'primary_color', '#1F9E9E')) ?>" style="flex:1;">
                     </div>
                 </div>
                 <div class="form-group">
                     <label class="form-label">اللون الثانوي</label>
                     <div style="display:flex; gap:8px; align-items:center;">
-                        <input type="color" name="secondary_color" value="<?= h(setting($d, 'secondary_color', '#0D47A1')) ?>" style="width:60px; height:40px; border:none; cursor:pointer;">
-                        <input type="text" name="secondary_color_text" class="form-input" value="<?= h(setting($d, 'secondary_color', '#0D47A1')) ?>" style="flex:1;">
+                        <input type="color" name="secondary_color" value="<?= h(setting($d, 'secondary_color', '#147070')) ?>" style="width:60px; height:40px; border:none; cursor:pointer;">
+                        <input type="text" name="secondary_color_text" class="form-input" value="<?= h(setting($d, 'secondary_color', '#147070')) ?>" style="flex:1;">
                     </div>
                 </div>
                 <button type="submit" class="btn btn-primary">💾 حفظ الإعدادات</button>

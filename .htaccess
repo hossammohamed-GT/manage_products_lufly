@@ -2,24 +2,20 @@ Options -Indexes
 
 # Protect sensitive files
 <FilesMatch "^(config(\\.local)?|app)\\.php$">
- Require all denied
+    Require all denied
 </FilesMatch>
 
-# Protect data and database directories
-<IfModule mod_rewrite.c>
- RewriteEngine On
- RewriteRule ^data/ - [F,L]
- RewriteRule ^database/ - [F,L]
- RewriteRule ^tools/ - [F,L]
- RewriteRule ^google_drive/ - [F,L]
- RewriteRule ^tests/ - [F,L]
-</IfModule>
-
-# Allow access to assets and uploads
-<Directory assets>
- Require all granted
-</Directory>
-
-<Directory uploads>
- Require all granted
-</Directory>
+# Note: If you get "Internal Server Error", ensure:
+# 1. In httpd.conf: AllowOverride All is set for htdocs
+# 2. mod_rewrite is enabled (optional, only used for extra protection)
+#
+# Uncomment the following lines ONLY if mod_rewrite is enabled in httpd.conf:
+#
+# <IfModule mod_rewrite.c>
+#     RewriteEngine On
+#     RewriteRule ^data/.*$ - [F,L]
+#     RewriteRule ^database/.*$ - [F,L]
+#     RewriteRule ^tools/.*$ - [F,L]
+#     RewriteRule ^tests/.*$ - [F,L]
+#     RewriteRule ^google_drive/.*$ - [F,L]
+# </IfModule>
