@@ -19,6 +19,32 @@ try {
     }
 
     // API endpoints
+    if ($action === 'api_products' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        header('Content-Type: application/json; charset=utf-8');
+        try {
+            $d = db();
+            $prefix = $_GET['prefix'] ?? '';
+            $allProducts = allProducts($d, false);
+            if ($prefix !== '') {
+                $filtered = array_values(array_filter($allProducts, fn($p) => $p['group'] === $prefix));
+            } else {
+                $filtered = $allProducts;
+            }
+            // Build HTML
+            ob_start();
+            foreach ($filtered as $p) {
+                echo productCardHTML($p);
+            }
+            $html = ob_get_clean();
+            echo json_encode(['ok'=>true, 'html'=>$html, 'count'=>count($filtered)]);
+        } catch (Throwable $e) {
+            http_response_code(400);
+            echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
+        }
+        exit;
+    }
+
+    // API endpoints
     if (in_array($action, ['inline_save','media_action']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Content-Type: application/json; charset=utf-8');
         try {
@@ -236,7 +262,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .flash { background: var(--success); color: white; padding: 12px 18px; border-radius: 10px; margin-bottom: 16px; font-weight: 600; font-size: 0.95rem; }
 
 /* ═══ PRODUCTS GRID ══ */
-.products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+.products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 24px; }
 .product-card {
     background: var(--card);
     border-radius: var(--radius);
@@ -251,7 +277,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 /* Card Image Carousel */
 .card-carousel {
     position: relative;
-    height: 220px;
+    height: 260px;
     background: #f0f2f5;
     overflow: hidden;
 }
@@ -263,8 +289,9 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .card-carousel-imgs img {
     min-width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
     cursor: pointer;
+    background: #f0f2f5;
 }
 .carousel-btn {
     position: absolute;
@@ -282,10 +309,9 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     display: flex;
     align-items: center;
     justify-content: center;
-    opacity: 0;
+    opacity: 0.7;
 }
-.card-carousel:hover .carousel-btn { opacity: 1; }
-.carousel-btn:hover { background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+.carousel-btn:hover { opacity: 1; background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
 .carousel-prev { right: 12px; }
 .carousel-next { left: 12px; }
 .carousel-dots {
@@ -295,15 +321,16 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     transform: translateX(-50%);
     display: flex;
     gap: 6px;
+    z-index: 3;
 }
 .carousel-dot {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: rgba(255,255,255,0.5);
+    background: rgba(0,0,0,0.3);
     transition: all 0.2s;
 }
-.carousel-dot.active { background: white; width: 20px; border-radius: 4px; }
+.carousel-dot.active { background: var(--primary); width: 20px; border-radius: 4px; }
 .no-image {
     width: 100%;
     height: 100%;

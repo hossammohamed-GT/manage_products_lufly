@@ -1,20 +1,19 @@
 <?php
 declare(strict_types=1);
 
-// Group icons based on product category
 function getGroupIcon(string $prefix): string {
     $icons = [
-        '1300' => '', '1320' => '🚰', 'SFD' => '🚰',
-        '1520' => '🚽', '1620' => '🚽', '1640' => '🚽', '1685' => '🚽',
-        '1682' => '🛁', '1650' => '🛁',
-        '1610' => '🚿', '1685' => '🚿', '1694' => '🚿',
-        '1653' => '🚿', '1654' => '🚿', '1722' => '🚿',
-        '1270' => '🚻', '1635' => '🚻',
-        '1690' => '', '1695' => '💺', '1681' => '💺',
-        '1755' => '🧴', '1644' => '🧴', '1670' => '🧴',
-        'HL' => '🔧', 'LXD' => '🔧', '5000' => '🔧',
+        '1300' => 'fa-faucet', '1320' => 'fa-faucet', 'SFD' => 'fa-faucet',
+        '1520' => 'fa-toilet', '1620' => 'fa-toilet', '1640' => 'fa-toilet', '1685' => 'fa-toilet',
+        '1682' => 'fa-bath', '1650' => 'fa-bath',
+        '1610' => 'fa-sink', '1694' => 'fa-sink',
+        '1653' => 'fa-shower', '1654' => 'fa-shower', '1722' => 'fa-shower',
+        '1270' => 'fa-restroom', '1635' => 'fa-restroom',
+        '1690' => 'fa-chair', '1695' => 'fa-chair', '1681' => 'fa-chair',
+        '1755' => 'fa-pump-soap', '1644' => 'fa-pump-soap', '1670' => 'fa-pump-soap',
+        'HL' => 'fa-wrench', 'LXD' => 'fa-wrench', '5000' => 'fa-wrench',
     ];
-    return $icons[$prefix] ?? '📦';
+    return $icons[$prefix] ?? 'fa-box';
 }
 
 function getGroups(PDO $db): array {
@@ -29,7 +28,6 @@ function getGroups(PDO $db): array {
     return $groups;
 }
 
-// Group the prefixes into categories for the sidebar
 function getGroupCategories(array $groups): array {
     $categories = [
         'WC & Toilets' => [],
@@ -64,11 +62,11 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
     
     $html = '<div class="sidebar">';
     $html .= '<div class="sidebar-header">';
-    $html .= '<div class="sidebar-title">📂 استكشف المنتجات</div>';
+    $html .= '<div class="sidebar-title"><i class="fas fa-folder-open"></i> استكشف المنتجات</div>';
     $html .= '<div class="sidebar-total">' . $totalProducts . ' منتج في ' . count($groups) . ' مجموعة</div>';
     $html .= '</div>';
     
-    $html .= '<div class="sidebar-search-wrap"><input type="text" class="sidebar-search" placeholder="🔍 ابحث في المجموعات..." id="sidebarSearch"></div>';
+    $html .= '<div class="sidebar-search-wrap"><input type="text" class="sidebar-search" placeholder="ابحث في المجموعات..." id="sidebarSearch"></div>';
     
     $html .= '<div class="sidebar-categories">';
     foreach ($categories as $catName => $catGroups) {
@@ -77,14 +75,14 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
         $html .= '<div class="sidebar-category">';
         $html .= '<button class="sidebar-cat-btn" data-target="' . $catId . '" aria-expanded="' . ($isOpen ? 'true' : 'false') . '">';
         $html .= '<span class="cat-name">' . h($catName) . '</span>';
-        $html .= '<span class="cat-arrow">‹</span>';
+        $html .= '<span class="cat-arrow"><i class="fas fa-chevron-down"></i></span>';
         $html .= '</button>';
         $html .= '<div class="sidebar-cat-items" id="' . $catId . '" style="' . ($isOpen ? '' : 'display:none') . '">';
         foreach ($catGroups as $prefix => $count) {
             $isActive = (string)$prefix === $activePrefix;
             $icon = getGroupIcon((string)$prefix);
-            $html .= '<a href="?action=group&prefix=' . urlencode((string)$prefix) . '" class="sidebar-group ' . ($isActive ? 'active' : '') . '" data-prefix="' . htmlspecialchars((string)$prefix) . '">';
-            $html .= '<span class="group-icon">' . $icon . '</span>';
+            $html .= '<a href="#" class="sidebar-group ' . ($isActive ? 'active' : '') . '" data-prefix="' . htmlspecialchars((string)$prefix) . '" onclick="filterByGroup(\'' . h((string)$prefix) . '\'); return false;">';
+            $html .= '<i class="fas ' . $icon . ' group-icon"></i>';
             $html .= '<span class="group-name">' . h((string)$prefix) . '</span>';
             $html .= '<span class="group-count">' . $count . '</span>';
             $html .= '</a>';
@@ -94,7 +92,7 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
     $html .= '</div>';
     
     $html .= '<div class="sidebar-footer">';
-    $html .= '<a href="?action=home" class="sidebar-all-btn">🏠 عرض كل المنتجات</a>';
+    $html .= '<a href="#" class="sidebar-all-btn" onclick="showAllProducts(); return false;"><i class="fas fa-home"></i> عرض كل المنتجات</a>';
     $html .= '</div>';
     $html .= '</div>';
     return $html;
@@ -102,7 +100,7 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
 ?>
 
 <style>
-/* ══════ Sidebar ═══════ */
+/* ══ Sidebar ══ */
 .sidebar {
     width: 320px;
     flex-shrink: 0;
@@ -176,8 +174,8 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
 .sidebar-cat-btn:hover { background: var(--primary-light); }
 .cat-arrow {
     transition: transform 0.2s;
-    font-size: 1.2rem;
     color: var(--text-muted);
+    font-size: 0.8rem;
 }
 .sidebar-cat-btn[aria-expanded="true"] .cat-arrow { transform: rotate(-90deg); }
 
@@ -205,7 +203,8 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
 }
 .sidebar-group.active .group-count { background: rgba(255,255,255,0.3); color: white; }
 
-.group-icon { font-size: 1.1rem; width: 22px; text-align: center; }
+.group-icon { font-size: 1rem; width: 20px; text-align: center; color: var(--text-muted); }
+.sidebar-group.active .group-icon { color: white; }
 .group-name {
     font-weight: 600;
     font-size: 0.88rem;
@@ -215,7 +214,7 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
 .group-count {
     background: var(--primary-light);
     color: var(--primary);
-    padding: 2px 10px;
+    padding: 2px 9px;
     border-radius: 12px;
     font-size: 0.75rem;
     font-weight: 700;
@@ -242,8 +241,96 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
 }
 .sidebar-all-btn:hover { background: var(--primary-dark); }
 
-@media (max-width: 900px) {
-    .sidebar { display: none; }
-    .main-layout { padding: 16px; }
-}
+@media (max-width: 900px) { .sidebar { display: none; } }
 </style>
+
+<script>
+// Sidebar category toggle
+document.querySelectorAll('.sidebar-cat-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        const target = this.getAttribute('data-target');
+        const items = document.getElementById(target);
+        const isExpanded = this.getAttribute('aria-expanded') === 'true';
+        this.setAttribute('aria-expanded', (!isExpanded).toString());
+        items.style.display = isExpanded ? 'none' : 'block';
+    });
+});
+
+// Sidebar search filter
+const sidebarSearch = document.getElementById('sidebarSearch');
+if (sidebarSearch) {
+    sidebarSearch.addEventListener('input', function(e) {
+        const query = e.target.value.toLowerCase();
+        document.querySelectorAll('.sidebar-group').forEach(el => {
+            const prefix = el.getAttribute('data-prefix').toLowerCase();
+            el.style.display = prefix.includes(query) ? 'flex' : 'none';
+        });
+    });
+}
+
+// Filter products by group (SPA style - no page reload)
+window.filterByGroup = function(prefix) {
+    // Update active state in sidebar
+    document.querySelectorAll('.sidebar-group').forEach(el => el.classList.remove('active'));
+    const activeLink = document.querySelector('.sidebar-group[data-prefix="' + prefix + '"]');
+    if (activeLink) activeLink.classList.add('active');
+    
+    // Show loading
+    const grid = document.querySelector('.products-grid');
+    if (grid) {
+        grid.style.opacity = '0.5';
+        grid.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding:40px;"><i class="fas fa-spinner fa-spin" style="font-size:2rem; color:var(--primary);"></i></div>';
+    }
+    
+    // Fetch filtered products
+    fetch('?action=api_products&prefix=' + encodeURIComponent(prefix))
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            if (grid) {
+                grid.innerHTML = data.html;
+                grid.style.opacity = '1';
+            }
+            // Update title
+            const titleEl = document.querySelector('.toolbar-title');
+            if (titleEl) titleEl.textContent = 'مجموعة الكود: ' + prefix;
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        if (grid) {
+            grid.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding:40px; color:var(--danger);"><i class="fas fa-exclamation-circle"></i> خطأ في تحميل البيانات</div>';
+            grid.style.opacity = '1';
+        }
+    });
+};
+
+// Show all products
+window.showAllProducts = function() {
+    document.querySelectorAll('.sidebar-group').forEach(el => el.classList.remove('active'));
+    
+    const grid = document.querySelector('.products-grid');
+    if (grid) {
+        grid.style.opacity = '0.5';
+        grid.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding:40px;"><i class="fas fa-spinner fa-spin" style="font-size:2rem; color:var(--primary);"></i></div>';
+    }
+    
+    fetch('?action=api_products&prefix=')
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok && grid) {
+            grid.innerHTML = data.html;
+            grid.style.opacity = '1';
+        }
+        const titleEl = document.querySelector('.toolbar-title');
+        if (titleEl) titleEl.textContent = 'تصفح كل المنتجات';
+    })
+    .catch(err => {
+        console.error(err);
+        if (grid) {
+            grid.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding:40px; color:var(--danger);"><i class="fas fa-exclamation-circle"></i> خطأ</div>';
+            grid.style.opacity = '1';
+        }
+    });
+};
+</script>
