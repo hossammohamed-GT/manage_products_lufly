@@ -44,6 +44,71 @@ try {
         exit;
     }
 
+    // Media actions endpoint (JSON) — replace / delete / add images
+    if ($action === 'media_action' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        header('Content-Type: application/json; charset=utf-8');
+        try {
+            checkCsrf();
+            $d = db();
+            $mediaId = (int)($_POST['media_id'] ?? 0);
+            $productId = (int)($_POST['product_id'] ?? 0);
+            $op = (string)($_POST['op'] ?? '');
+            
+            if (!in_array($op, ['replace','delete','add'], true)) throw new RuntimeException('عملية غير صالحة');
+            if ($op !== 'add' && !$mediaId) throw new RuntimeException('معرف الصورة مطلوب');
+            
+            if ($op === 'delete') {
+                $m = run($d, 'SELECT * FROM media WHERE id=? AND product_id=?', [$mediaId, $productId])->fetch();
+                if (!$m) throw new RuntimeException('الصورة غير موجودة');
+                @unlink(__DIR__.'/'.ltrim($m['path'],'/'));
+                run($d, 'DELETE FROM media WHERE id=?', [$mediaId]);
+                echo json_encode(['ok'=>true, 'op'=>'delete', 'media_id'=>$mediaId]);
+                exit;
+            }
+            
+            // replace or add — needs uploaded file
+            $kind = (string)($_POST['kind'] ?? 'photo');
+            if (!in_array($kind, ['photo','drawing','extra'], true)) throw new RuntimeException('نوع غير صالح');
+            
+            if (empty($_FILES['file']) || ($_FILES['file']['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+                throw new RuntimeException('لم يتم رفع ملف');
+            }
+            $f = $_FILES['file'];
+            if ($f['error'] !== UPLOAD_ERR_OK) throw new RuntimeException('خطأ في الرفع');
+            if ((int)$f['size'] > 12*1024*1024) throw new RuntimeException('الحجم أكبر من 12 ميجابايت');
+            
+            $mime = (new finfo(FILEINFO_MIME_TYPE))->file($f['tmp_name']);
+            $allowedMime = ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp','image/gif'=>'gif'];
+            if (!isset($allowedMime[$mime]) || @getimagesize($f['tmp_name'])===false) throw new RuntimeException('مسموح فقط JPG/PNG/WebP/GIF');
+            
+            $ext = $allowedMime[$mime];
+            $newPath = 'uploads/'.bin2hex(random_bytes(18)).'.'.$ext;
+            if (!is_dir(__DIR__.'/uploads')) mkdir(__DIR__.'/uploads', 0755, true);
+            if (!move_uploaded_file($f['tmp_name'], __DIR__.'/'.ltrim($newPath,'/'))) throw new RuntimeException('تعذر حفظ الصورة');
+            
+            $sha = hash_file('sha256', __DIR__.'/'.ltrim($newPath,'/'));
+            $origName = substr(basename(str_replace('\\','/',$f['name'])),0,240);
+            
+            if ($op === 'replace') {
+                $m = run($d, 'SELECT * FROM media WHERE id=? AND product_id=?', [$mediaId, $productId])->fetch();
+                if (!$m) { @unlink(__DIR__.'/'.ltrim($newPath,'/')); throw new RuntimeException('الصورة غير موجودة'); }
+                @unlink(__DIR__.'/'.ltrim($m['path'],'/'));
+                run($d, 'UPDATE media SET path=?, sha256=?, kind=?, original_name=? WHERE id=?', [$newPath, $sha, $kind, $origName, $mediaId]);
+                echo json_encode(['ok'=>true, 'op'=>'replace', 'media_id'=>$mediaId, 'path'=>$newPath]);
+            } else {
+                $maxSort = (int)$d->query('SELECT MAX(sort_order) FROM media WHERE product_id='.$productId)->fetchColumn();
+                run($d, 'INSERT INTO media (product_id,path,original_name,kind,caption,sort_order,previewable,sha256) VALUES (?,?,?,?,?,?,1,?)',
+                    [$productId, $newPath, $origName, $kind, '', $maxSort+1, $sha]);
+                $newId = (int)$d->lastInsertId();
+                echo json_encode(['ok'=>true, 'op'=>'add', 'media_id'=>$newId, 'path'=>$newPath]);
+            }
+        } catch (Throwable $e) {
+            http_response_code(400);
+            echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
+        }
+        exit;
+    }
+
     switch ($action) {
         case 'home': showHome($page); break;
         case 'group': showGroup($_GET['prefix'] ?? '', $page); break;
@@ -555,6 +620,116 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 }
 .product-code:hover .edit-hint, .product-desc:hover .edit-hint, .product-brand:hover .edit-hint { opacity: 1; }
 
+/* ═══ PRODUCT GALLERY GRID ═══ */
+.product-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.gallery-cell {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 12px;
+    overflow: hidden;
+    cursor: pointer;
+    background: #f0f2f5;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    transition: all 0.25s;
+}
+.gallery-cell:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+}
+.gallery-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gallery-cell-overlay {
+    position: absolute; inset: 0;
+    background: linear-gradient(0deg, rgba(0,0,0,0.5) 0%, transparent 50%);
+    opacity: 0;
+    transition: opacity 0.2s;
+    display: flex; align-items: flex-end; justify-content: flex-end; padding: 8px;
+}
+.gallery-cell:hover .gallery-cell-overlay { opacity: 1; }
+.gallery-cell-badge {
+    position: absolute; top: 8px; right: 8px;
+    background: var(--primary); color: white;
+    padding: 2px 8px; border-radius: 10px;
+    font-size: 0.7rem; font-weight: 700;
+}
+.lb-add-cell {
+    position: relative; aspect-ratio: 1;
+    border-radius: 12px; border: 2px dashed var(--border);
+    background: #f8f9fa; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: all 0.2s; overflow: hidden;
+}
+.lb-add-cell:hover { border-color: var(--primary); background: var(--primary-light); }
+.lb-add-cell-content { text-align: center; color: var(--text-muted); font-size: 0.85rem; }
+.lb-add-cell-content .plus { font-size: 2rem; color: var(--primary); display: block; margin-bottom: 4px; }
+
+/* ═══ LIGHTBOX ═══ */
+.lightbox {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.92);
+    z-index: 9999; align-items: center; justify-content: center;
+    animation: lbFadeIn 0.2s ease;
+}
+.lightbox.active { display: flex; }
+@keyframes lbFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.lightbox-close {
+    position: absolute; top: 20px; left: 20px;
+    width: 48px; height: 48px; border-radius: 50%;
+    background: rgba(255,255,255,0.15); border: none;
+    color: white; font-size: 1.5rem; cursor: pointer;
+    transition: background 0.2s;
+    display: flex; align-items: center; justify-content: center;
+}
+.lightbox-close:hover { background: rgba(255,255,255,0.3); }
+.lightbox-img {
+    max-width: 90vw; max-height: 85vh; object-fit: contain;
+    border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.lightbox-nav {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    width: 50px; height: 50px; border-radius: 50%;
+    background: rgba(255,255,255,0.15); border: none;
+    color: white; font-size: 1.5rem; cursor: pointer;
+    transition: background 0.2s;
+    display: flex; align-items: center; justify-content: center;
+}
+.lightbox-nav:hover { background: rgba(255,255,255,0.3); }
+.lightbox-prev { right: 20px; }
+.lightbox-next { left: 20px; }
+.lightbox-actions {
+    position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 12px;
+    background: rgba(0,0,0,0.7); padding: 12px 20px;
+    border-radius: 16px; backdrop-filter: blur(12px);
+}
+.lightbox-action-btn {
+    padding: 10px 18px; border: none; border-radius: 10px;
+    font-size: 0.85rem; font-weight: 700; cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    transition: all 0.2s; font-family: inherit;
+}
+.lb-replace { background: var(--primary); color: white; }
+.lb-replace:hover { background: var(--primary-dark); }
+.lb-delete { background: var(--danger); color: white; }
+.lb-delete:hover { background: #dc2626; }
+.lightbox-counter {
+    position: absolute; top: 24px; right: 24px;
+    color: rgba(255,255,255,0.8); font-size: 0.9rem; font-weight: 600;
+    background: rgba(0,0,0,0.5); padding: 6px 14px; border-radius: 20px;
+}
+.lightbox-replace-form {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.1); padding: 6px 10px; border-radius: 12px;
+}
+.lightbox-replace-form input[type=file] { color: white; font-size: 0.85rem; max-width: 200px; }
+.lightbox-replace-form input[type=file]::file-selector-button {
+    background: var(--primary); color: white; border: none;
+    padding: 6px 12px; border-radius: 8px; cursor: pointer; font-weight: 600;
+}
+
 @media (max-width: 900px) { .sidebar { display: none; } }
 </style>
 </head>
@@ -625,17 +800,129 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 <!-- ═══ INLINE EDITING JS ═══ -->
 <?= $extraJs ?>
 <script>
-// Gallery carousel dots update
-document.querySelectorAll('.card-gallery').forEach(gallery => {
-    const dots = gallery.nextElementSibling?.querySelectorAll('.card-gallery-dot');
-    if (!dots || dots.length === 0) return;
-    
-    gallery.addEventListener('scroll', () => {
-        const scrollLeft = gallery.scrollLeft;
-        const width = gallery.offsetWidth;
-        const index = Math.round(scrollLeft / width);
-        dots.forEach((dot, i) => dot.classList.toggle('active', i === index));
+// ═══ LIGHTBOX ═══
+const lbState = { idx: 0, total: 0, productId: 0, images: [] };
+
+function openLightbox(idx, total, productId) {
+    const cells = document.querySelectorAll('.gallery-cell');
+    const imgs = [];
+    cells.forEach(cell => {
+        const img = cell.querySelector('img');
+        if (img) imgs.push(img.src);
     });
+    lbState.idx = idx;
+    lbState.total = total;
+    lbState.productId = productId;
+    lbState.images = imgs;
+    updateLightbox();
+    document.getElementById('lightbox').classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function updateLightbox() {
+    document.getElementById('lbImg').src = lbState.images[lbState.idx];
+    document.getElementById('lbCounter').textContent = (lbState.idx + 1) + ' / ' + lbState.total;
+    document.getElementById('lbActions').innerHTML = `
+        <button class="lightbox-action-btn lb-replace" onclick="triggerReplace()"> استبدال الصورة</button>
+        <button class="lightbox-action-btn lb-delete" onclick="deleteImage()">🗑️ حذف</button>
+        <form class="lightbox-replace-form" id="lbReplaceForm" style="display:none;">
+            <input type="file" id="lbReplaceFile" accept="image/*" required>
+            <button type="button" onclick="cancelReplace()" style="background:#f0f2f5;border:none;padding:6px 12px;border-radius:8px;cursor:pointer;">إلغاء</button>
+        </form>
+    `;
+    document.getElementById('lbReplaceFile').onchange = function() {
+        if (this.files[0]) mediaAction('replace', 0, lbState.productId, this.files[0]);
+    };
+}
+
+function closeLightbox() {
+    document.getElementById('lightbox').classList.remove('active');
+    document.body.style.overflow = '';
+}
+
+function lbNav(dir) {
+    lbState.idx = (lbState.idx + dir + lbState.total) % lbState.total;
+    updateLightbox();
+}
+
+function triggerReplace() {
+    document.getElementById('lbReplaceForm').style.display = 'flex';
+    document.getElementById('lbReplaceFile').click();
+}
+
+function cancelReplace() {
+    document.getElementById('lbReplaceForm').style.display = 'none';
+}
+
+function deleteImage() {
+    if (!confirm('هل تريد حذف هذه الصورة؟')) return;
+    const cells = document.querySelectorAll('.gallery-cell');
+    const cell = cells[lbState.idx];
+    const mediaId = cell ? cell.dataset.mediaId : 0;
+    if (!mediaId) { alert('معرف الصورة غير متوفر'); return; }
+    
+    const fd = new FormData();
+    fd.append('csrf', document.getElementById('csrf-token').value);
+    fd.append('op', 'delete');
+    fd.append('media_id', mediaId);
+    fd.append('product_id', lbState.productId);
+    
+    fetch('?action=media_action', { method:'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            lbState.images.splice(lbState.idx, 1);
+            lbState.total--;
+            if (lbState.idx >= lbState.total) lbState.idx = Math.max(0, lbState.total - 1);
+            if (lbState.total === 0) { closeLightbox(); location.reload(); }
+            else { if (cell) cell.remove(); updateLightbox(); }
+            showToast('تم حذف الصورة');
+        } else { showToast(data.error || 'خطأ في الحذف', true); }
+    })
+    .catch(() => showToast('خطأ في الاتصال', true));
+}
+
+function mediaAction(op, mediaId, productId, file) {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('csrf', document.getElementById('csrf-token').value);
+    fd.append('op', op);
+    fd.append('product_id', productId);
+    if (mediaId) fd.append('media_id', mediaId);
+    fd.append('file', file);
+    fd.append('kind', 'photo');
+    
+    showToast(op === 'add' ? 'جاري الإضافة...' : 'جاري الاستبدال...');
+    
+    fetch('?action=media_action', { method:'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            if (op === 'add') { location.reload(); }
+            else if (op === 'replace') {
+                const ts = '?t=' + Date.now();
+                lbState.images[lbState.idx] = data.path + ts;
+                const cells = document.querySelectorAll('.gallery-cell');
+                const cell = cells[lbState.idx];
+                if (cell) { const img = cell.querySelector('img'); if (img) img.src = data.path + ts; }
+                updateLightbox();
+                showToast('تم استبدال الصورة');
+                cancelReplace();
+            }
+        } else { showToast(data.error || 'خطأ', true); }
+    })
+    .catch(() => showToast('خطأ في الاتصال', true));
+}
+
+document.addEventListener('keydown', function(e) {
+    const lb = document.getElementById('lightbox');
+    if (!lb.classList.contains('active')) return;
+    if (e.key === 'Escape') closeLightbox();
+    if (e.key === 'ArrowLeft') lbNav(1);
+    if (e.key === 'ArrowRight') lbNav(-1);
+});
+document.getElementById('lightbox')?.addEventListener('click', function(e) {
+    if (e.target === this) closeLightbox();
 });
 
 (function(){
@@ -989,29 +1276,39 @@ function showProduct(int $id): void {
     
     <div class="detail-layout">
         <div class="detail-box">
-            <?php if (!empty($media)):
-                $previewable = array_values(array_filter($media, fn($m)=>(int)$m['previewable']));
-                $first = $previewable[0] ?? null;
-                if ($first): ?>
-                <img src="<?= h($first['path']) ?>" class="gallery-img" id="mainImg">
-                <?php if (count($previewable) > 1): ?>
-                <div class="gallery-thumbs">
-                    <?php foreach ($previewable as $m): ?>
-                    <img src="<?= h($m['path']) ?>" class="gallery-thumb" onclick="document.getElementById('mainImg').src='<?= h($m['path']) ?>'">
-                    <?php endforeach; ?>
+            <?php
+            $previewable = array_values(array_filter($media, fn($m)=>(int)$m['previewable']));
+            $nonPrev = array_values(array_filter($media, fn($m)=>!(int)$m['previewable']));
+            ?>
+            
+            <?php if (!empty($previewable)): ?>
+            <div class="product-gallery">
+                <?php foreach ($previewable as $i => $m): ?>
+                <div class="gallery-cell" onclick="openLightbox(<?= $i ?>, <?= count($previewable) ?>, <?= $id ?>)" data-media-id="<?= (int)$m['id'] ?>">
+                    <img src="<?= h($m['path']) ?>" alt="" loading="lazy">
+                    <?php if ($i === 0): ?><span class="gallery-cell-badge">الصورة الرئيسية</span><?php endif; ?>
+                    <div class="gallery-cell-overlay">
+                        <span style="background:white;color:var(--text);padding:4px 10px;border-radius:8px;font-size:0.75rem;font-weight:700;">🔍 تكبير</span>
+                    </div>
                 </div>
-                <?php endif;
-                endif;
-            else: ?>
-                <div class="no-results" style="padding:40px;"><div class="icon">📷</div><p>لا توجد صور</p><a href="?action=edit&id=<?= $id ?>" class="btn btn-outline btn-sm" style="margin-top:12px;">إضافة صور</a></div>
+                <?php endforeach; ?>
+                <label class="lb-add-cell" for="addImgInput">
+                    <div class="lb-add-cell-content"><span class="plus">+</span>إضافة صورة</div>
+                    <input type="file" id="addImgInput" accept="image/*" style="display:none" onchange="mediaAction('add', 0, <?= $id ?>, this.files[0])">
+                </label>
+            </div>
+            <?php else: ?>
+            <label class="lb-add-cell" for="addImgInputFirst" style="aspect-ratio:16/9;margin-bottom:12px;">
+                <div class="lb-add-cell-content"><span class="plus">+</span>أضف أول صورة للمنتج</div>
+                <input type="file" id="addImgInputFirst" accept="image/*" style="display:none" onchange="mediaAction('add', 0, <?= $id ?>, this.files[0])">
+            </label>
             <?php endif; ?>
             
-            <?php $nonPrev = array_filter($media, fn($m)=>!(int)$m['previewable']);
-            if (!empty($nonPrev)): ?>
+            <?php if (!empty($nonPrev)): ?>
             <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
                 <strong>مرفقات أخرى:</strong>
                 <?php foreach ($nonPrev as $m): ?>
-                <div style="margin-top:8px;"><a href="<?= h($m['path']) ?>" download class="btn btn-outline btn-sm"> <?= h($m['original_name']?:'تحميل') ?></a></div>
+                <div style="margin-top:8px;"><a href="<?= h($m['path']) ?>" download class="btn btn-outline btn-sm">📥 <?= h($m['original_name']?:'تحميل') ?></a></div>
                 <?php endforeach; ?>
             </div>
             <?php endif; ?>
@@ -1019,14 +1316,24 @@ function showProduct(int $id): void {
         
         <div class="detail-box">
             <div class="detail-row"><div class="detail-label">الكود (اضغط للتعديل)</div><div class="detail-value code-val" data-value="<?= h($product['code']) ?>" onclick="inlineEdit(this,'code',<?= $id ?>,<?= $product['version'] ?>)"><?= h($product['code']) ?><span class="edit-hint">✏️</span></div></div>
-            <div class="detail-row"><div class="detail-label">الماركة (اضغط للتعديل)</div><div class="detail-value" data-value="<?= h($product['brand']) ?>" onclick="inlineEdit(this,'brand',<?= $id ?>,<?= $product['version'] ?>)"><?= h($product['brand']?:'—') ?><span class="edit-hint">✏️</span></div></div>
+            <div class="detail-row"><div class="detail-label">الماركة (اضغط للتعديل)</div><div class="detail-value" data-value="<?= h($product['brand']) ?>" onclick="inlineEdit(this,'brand',<?= $id ?>,<?= $product['version'] ?>)"><?= h($product['brand']?:'—') ?><span class="edit-hint">️</span></div></div>
             <div class="detail-row"><div class="detail-label">الحالة (اضغط للتعديل)</div><div class="detail-value" data-value="<?= h($product['status']) ?>" onclick="inlineEdit(this,'status',<?= $id ?>,<?= $product['version'] ?>)"><span class="status-tag status-tag-<?= str_replace(' ','-',$product['status']) ?>" style="position:static;"><?= h($product['status']) ?></span><span class="edit-hint">✏️</span></div></div>
             <div class="detail-row"><div class="detail-label">الوصف (اضغط للتعديل)</div><div class="detail-value" style="white-space:pre-wrap;" data-value="<?= h($product['description']) ?>" onclick="inlineEdit(this,'description',<?= $id ?>,<?= $product['version'] ?>)"><?= h($product['description']?:'—') ?><span class="edit-hint">✏️</span></div></div>
             <?php if ($product['notes']): ?><div class="detail-row"><div class="detail-label">ملاحظات (اضغط للتعديل)</div><div class="detail-value" style="white-space:pre-wrap;" data-value="<?= h($product['notes']) ?>" onclick="inlineEdit(this,'notes',<?= $id ?>,<?= $product['version'] ?>)"><?= h($product['notes']) ?><span class="edit-hint">✏️</span></div></div><?php endif; ?>
             <div class="detail-row"><div class="detail-label">مجموعة الكود</div><div class="detail-value"><a href="?action=group&prefix=<?= urlencode((string)$group) ?>"><?= h($group) ?></a></div></div>
-            <div class="detail-row"><div class="detail-label">المرفقات</div><div class="detail-value"><?= count($media) ?> مرفق</div></div>
+            <div class="detail-row"><div class="detail-label">المرفقات</div><div class="detail-value"><?= count($media) ?> مرفق (<?= count($previewable) ?> صورة)</div></div>
             <div class="detail-row"><div class="detail-label">الملف المصدر</div><div class="detail-value"><?= h($product['source_file']?:'—') ?> (سطر <?= (int)$product['source_row'] ?>)</div></div>
         </div>
+    </div>
+    
+    <!-- ═══ LIGHTBOX ═══ -->
+    <div class="lightbox" id="lightbox">
+        <button class="lightbox-close" onclick="closeLightbox()"></button>
+        <span class="lightbox-counter" id="lbCounter"></span>
+        <button class="lightbox-nav lightbox-prev" onclick="lbNav(-1)">›</button>
+        <button class="lightbox-nav lightbox-next" onclick="lbNav(1)">‹</button>
+        <img class="lightbox-img" id="lbImg" src="" alt="">
+        <div class="lightbox-actions" id="lbActions"></div>
     </div>
     <?php
     
