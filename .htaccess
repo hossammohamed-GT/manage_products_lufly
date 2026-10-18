@@ -1,21 +1,14 @@
-Options -Indexes
+# LUFLY Catalog - Apache Configuration
 
-# Protect sensitive files
-<FilesMatch "^(config(\\.local)?|app)\\.php$">
+# Prevent directory listing
+Options -Indexes +FollowSymLinks
+
+# Protect sensitive PHP files
+<FilesMatch "^(config|config\.local|app)\.php$">
     Require all denied
 </FilesMatch>
 
-# Note: If you get "Internal Server Error", ensure:
-# 1. In httpd.conf: AllowOverride All is set for htdocs
-# 2. mod_rewrite is enabled (optional, only used for extra protection)
-#
-# Uncomment the following lines ONLY if mod_rewrite is enabled in httpd.conf:
-#
-# <IfModule mod_rewrite.c>
-#     RewriteEngine On
-#     RewriteRule ^data/.*$ - [F,L]
-#     RewriteRule ^database/.*$ - [F,L]
-#     RewriteRule ^tools/.*$ - [F,L]
-#     RewriteRule ^tests/.*$ - [F,L]
-#     RewriteRule ^google_drive/.*$ - [F,L]
-# </IfModule>
+# Prevent direct access to data/database files (json, sqlite, sql, xlsx)
+<FilesMatch "\.(json|sqlite|sql|xlsx|zip|csv)$">
+    Require all denied
+</FilesMatch>

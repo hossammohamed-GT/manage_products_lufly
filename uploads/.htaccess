@@ -1,8 +1,9 @@
 Options -Indexes
-Require all granted
 
-<IfModule mod_php.c>
-    php_value upload_max_filesize 12M
-    php_value post_max_size 128M
-    php_value max_file_uploads 30
-</IfModule>
+<FilesMatch "\.(jpg|jpeg|png|gif|webp|svg|pdf|emf|dxf|dwg|zip)$">
+    Require all granted
+</FilesMatch>
+
+<FilesMatch "\.php$">
+    Require all denied
+</FilesMatch>
