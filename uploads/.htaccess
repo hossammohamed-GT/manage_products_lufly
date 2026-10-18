@@ -1,9 +1,1 @@
-Options -Indexes
 
-<FilesMatch "\.(jpg|jpeg|png|gif|webp|svg|pdf|emf|dxf|dwg|zip)$">
-    Require all granted
-</FilesMatch>
-
-<FilesMatch "\.php$">
-    Require all denied
-</FilesMatch>

@@ -1,14 +1,1 @@
-# LUFLY Catalog - Apache Configuration
 
-# Prevent directory listing
-Options -Indexes +FollowSymLinks
-
-# Protect sensitive PHP files
-<FilesMatch "^(config|config\.local|app)\.php$">
-    Require all denied
-</FilesMatch>
-
-# Prevent direct access to data/database files (json, sqlite, sql, xlsx)
-<FilesMatch "\.(json|sqlite|sql|xlsx|zip|csv)$">
-    Require all denied
-</FilesMatch>
