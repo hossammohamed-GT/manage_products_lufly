@@ -126,7 +126,7 @@ try {
 // HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════
 
-function layout(string $title, string $content, array $groups = [], string $extraJs = ''): void
+function layout(string $title, string $content, array $groups = [], string $extraJs = '', string $action = ''): void
 {
     require_once __DIR__.'/includes/sidebar.php';
     $d = db();
@@ -301,9 +301,46 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     flex-direction: column;
 }
 .product-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
-.product-card-header { position: relative; height: 180px; background: #f0f2f5; overflow: hidden; }
-.product-card-header img { width: 100%; height: 100%; object-fit: cover; }
+.product-card-header { position: relative; height: 200px; background: #f0f2f5; overflow: hidden; }
 .product-card-header .no-img { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #bbb; font-size: 3rem; }
+
+/* Card Gallery */
+.card-gallery {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+}
+.card-gallery::-webkit-scrollbar { display: none; }
+.card-gallery-img {
+    min-width: 100%;
+    height: 100%;
+    object-fit: cover;
+    scroll-snap-align: start;
+}
+.card-gallery-dots {
+    position: absolute;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 6px;
+    z-index: 2;
+}
+.card-gallery-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.5);
+    transition: background 0.2s;
+}
+.card-gallery-dot.active {
+    background: white;
+    width: 20px;
+    border-radius: 4px;
+}
 .status-tag {
     position: absolute;
     top: 12px;
@@ -588,9 +625,20 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 <!-- ═══ INLINE EDITING JS ═══ -->
 <?= $extraJs ?>
 <script>
+// Gallery carousel dots update
+document.querySelectorAll('.card-gallery').forEach(gallery => {
+    const dots = gallery.nextElementSibling?.querySelectorAll('.card-gallery-dot');
+    if (!dots || dots.length === 0) return;
+    
+    gallery.addEventListener('scroll', () => {
+        const scrollLeft = gallery.scrollLeft;
+        const width = gallery.offsetWidth;
+        const index = Math.round(scrollLeft / width);
+        dots.forEach((dot, i) => dot.classList.toggle('active', i === index));
+    });
+});
+
 (function(){
-    const csrf = document.querySelector('meta[name="csrf"]')?.content || '';
-    // Get CSRF from page (we'll store it in a hidden input)
     const csrfEl = document.getElementById('csrf-token');
     const token = csrfEl ? csrfEl.value : '';
 
@@ -721,18 +769,39 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 // ═══════════════════════════════════════════════════════════
 
 function productCardHTML(array $p): string {
-    $cover = !empty($p['cover']) ? '<img src="'.h($p['cover']).'" alt="" loading="lazy">' : '<div class="no-img">📷</div>';
+    // Get all media for this product
+    $d = db();
+    $media = mediaFor($d, $p['id']);
+    $previewable = array_values(array_filter($media, fn($m) => (int)$m['previewable']));
+    
+    // Build image gallery
+    $galleryHtml = '';
+    if (!empty($previewable)) {
+        $galleryHtml = '<div class="card-gallery">';
+        foreach ($previewable as $i => $m) {
+            $galleryHtml .= '<img src="'.h($m['path']).'" class="card-gallery-img" loading="lazy">';
+        }
+        $galleryHtml .= '</div>';
+        $galleryHtml .= '<div class="card-gallery-dots">';
+        for ($i = 0; $i < count($previewable); $i++) {
+            $galleryHtml .= '<span class="card-gallery-dot'.($i===0?' active':'').'"></span>';
+        }
+        $galleryHtml .= '</div>';
+    } else {
+        $galleryHtml = '<div class="no-img">📷</div>';
+    }
+    
     $statusClass = 'status-tag-' . str_replace(' ', '-', $p['status']);
     $statusText = ['Running'=>'نشط','New Model'=>'موديل جديد','Slow Moving'=>'بطيء','Aging'=>'قديم'][$p['status']] ?? $p['status'];
     $badges = '';
-    if (!empty($p['duplicate'])) $badges .= '<span class="badge-duplicate" style="position:absolute;top:12px;left:12px;background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:12px;font-size:0.7rem;font-weight:700;">⚠ مكرر</span>';
+    if (!empty($p['duplicate'])) $badges .= '<span class="badge-duplicate" style="position:absolute;top:12px;left:12px;background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:12px;font-size:0.7rem;font-weight:700;z-index:2;"> مكرر</span>';
     
     return '<div class="product-card" data-id="'.$p['id'].'" data-version="'.$p['version'].'">'
         .'<div class="product-card-header">'
-        .$cover
+        .$galleryHtml
         .'<span class="status-tag '.$statusClass.'">'.$statusText.'</span>'
         .$badges
-        .'<span class="media-badge">📎 ' . (int)$p['media_count'] . '</span>'
+        .'<span class="media-badge"> ' . count($previewable) . '</span>'
         .'</div>'
         .'<div class="product-card-body">'
         .'<div class="product-code" data-value="'.h($p['code']).'" onclick="inlineEdit(this,\'code\','.$p['id'].','.$p['version'].')" title="اضغط للتعديل">'
@@ -822,7 +891,7 @@ function showHome(int $page): void {
     <?php renderProducts($paged, $page, $totalPages, '?action=home&status='.urlencode($statusFilter).'&sort='.urlencode($sortBy)); ?>
     <?php
     
-    layout('الرئيسية', ob_get_clean(), $groups);
+    layout('الرئيسية', ob_get_clean(), $groups, '', $action);
 }
 
 // ─── GROUP VIEW ────────────────────────────────────────────
@@ -863,7 +932,7 @@ function showGroup(string $prefix, int $page): void {
     <?php
     
     $groups = getGroups($d);
-    layout('مجموعة '.$prefix, ob_get_clean(), $groups);
+    layout('مجموعة '.$prefix, ob_get_clean(), $groups, '', $action);
 }
 
 // ─── SEARCH ────────────────────────────────────────────────
@@ -891,7 +960,7 @@ function showSearch(string $q, int $page): void {
     <?php
     
     $groups = getGroups($d);
-    layout('بحث: '.$q, ob_get_clean(), $groups);
+    layout('بحث: '.$q, ob_get_clean(), $groups, '', $action);
 }
 
 // ─── VIEW PRODUCT ──────────────────────────────────────────
@@ -962,7 +1031,7 @@ function showProduct(int $id): void {
     <?php
     
     $groups = getGroups($d);
-    layout($product['code'], ob_get_clean(), $groups);
+    layout($product['code'], ob_get_clean(), $groups, '', $action);
 }
 
 // ── EDIT/ADD ──────────────────────────────────────────────
@@ -1022,7 +1091,7 @@ function editProduct(int $id): void {
     </div>
     <?php
     
-    layout($id ? 'تعديل: '.$product['code'] : 'إضافة منتج', ob_get_clean());
+    layout($id ? 'تعديل: '.$product['code'] : 'إضافة منتج', ob_get_clean(), [], '', $action);
 }
 
 // ─── ARCHIVE LIST ──────────────────────────────────────────
@@ -1055,7 +1124,7 @@ function showArchive(int $page): void {
         }
     }
     $groups = getGroups($d);
-    layout('الأرشيف', ob_get_clean(), $groups);
+    layout('الأرشيف', ob_get_clean(), $groups, '', $action);
 }
 
 // ─── SETTINGS ──────────────────────────────────────────────
@@ -1094,14 +1163,14 @@ function showSettings(): void {
     </div>
     <?php
     
-    layout('الإعدادات', ob_get_clean());
+    layout('الإعدادات', ob_get_clean(), [], '', $action);
 }
 
 // ─── ERROR PAGES ───────────────────────────────────────────
 function showError(string $message): void {
     ob_start();
     ?><div class="error-box"><h3>❌ حدث خطأ</h3><p><?= h($message) ?></p><a href="?action=home" class="btn btn-outline" style="margin-top:16px;">العودة للرئيسية</a></div><?php
-    layout('خطأ', ob_get_clean());
+    layout('خطأ', ob_get_clean(), [], '', $action);
 }
 
 function showSetupError(string $message): void {
@@ -1124,5 +1193,5 @@ function showSetupError(string $message): void {
         </div>
     </div>
     <?php
-    layout('خطأ في الإعداد', ob_get_clean());
+    layout('خطأ في الإعداد', ob_get_clean(), [], '', $action);
 }
