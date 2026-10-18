@@ -30,7 +30,12 @@ function db(bool $serverOnly=false): PDO {
  return $pdo;
 }
 function run(PDO $db,string $sql,array $params=[]): PDOStatement { $s=$db->prepare($sql);$s->execute($params);return $s; }
-function setting(PDO $db,string $key,string $default=''): string { $v=run($db,'SELECT value FROM settings WHERE name=?',[$key])->fetchColumn(); return $v===false?$default:(string)$v; }
+function setting(PDO $db,string $key,string $default=''): string {
+ try {
+  $v=run($db,'SELECT value FROM settings WHERE name=?',[$key])->fetchColumn();
+  return $v===false?$default:(string)$v;
+ } catch(Throwable $e) { return $default; }
+}
 function setSetting(PDO $db,string $key,string $value): void {
  if(run($db,'SELECT name FROM settings WHERE name=?',[$key])->fetchColumn()===false) run($db,'INSERT INTO settings (name,value) VALUES (?,?)',[$key,$value]);
  else run($db,'UPDATE settings SET value=? WHERE name=?',[$value,$key]);

@@ -1,4 +1,25 @@
 Options -Indexes
-<FilesMatch "^(config(\.local)?|app)\.php$">
+
+# Protect sensitive files
+<FilesMatch "^(config(\\.local)?|app)\\.php$">
  Require all denied
 </FilesMatch>
+
+# Protect data and database directories
+<IfModule mod_rewrite.c>
+ RewriteEngine On
+ RewriteRule ^data/ - [F,L]
+ RewriteRule ^database/ - [F,L]
+ RewriteRule ^tools/ - [F,L]
+ RewriteRule ^google_drive/ - [F,L]
+ RewriteRule ^tests/ - [F,L]
+</IfModule>
+
+# Allow access to assets and uploads
+<Directory assets>
+ Require all granted
+</Directory>
+
+<Directory uploads>
+ Require all granted
+</Directory>
