@@ -60,6 +60,20 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
     $categories = getGroupCategories($groups);
     $totalProducts = array_sum($groups);
     
+    // Get first image for each group
+    $d = db();
+    $firstImages = [];
+    $stmt = $d->query('SELECT p.id, p.code, m.path FROM products p JOIN media m ON m.product_id=p.id AND m.previewable=1 WHERE p.archived=0 GROUP BY p.id ORDER BY m.sort_order, m.id');
+    $seen = [];
+    while ($row = $stmt->fetch()) {
+        $pos = strpos($row['code'], '-');
+        $prefix = $pos !== false && $pos > 0 ? strtoupper(trim(substr($row['code'], 0, $pos))) : 'غير مصنف';
+        if (!isset($seen[$prefix])) {
+            $firstImages[$prefix] = $row['path'];
+            $seen[$prefix] = true;
+        }
+    }
+    
     $html = '<div class="sidebar">';
     $html .= '<div class="sidebar-header">';
     $html .= '<div class="sidebar-title"><i class="fas fa-folder-open"></i> استكشف المنتجات</div>';
@@ -81,8 +95,13 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
         foreach ($catGroups as $prefix => $count) {
             $isActive = (string)$prefix === $activePrefix;
             $icon = getGroupIcon((string)$prefix);
+            $thumb = $firstImages[(string)$prefix] ?? '';
             $html .= '<a href="#" class="sidebar-group ' . ($isActive ? 'active' : '') . '" data-prefix="' . htmlspecialchars((string)$prefix) . '" onclick="filterByGroup(\'' . h((string)$prefix) . '\'); return false;">';
-            $html .= '<i class="fas ' . $icon . ' group-icon"></i>';
+            if ($thumb) {
+                $html .= '<img src="' . h($thumb) . '" class="sidebar-thumb" alt="">';
+            } else {
+                $html .= '<i class="fas ' . $icon . ' group-icon"></i>';
+            }
             $html .= '<span class="group-name">' . h((string)$prefix) . '</span>';
             $html .= '<span class="group-count">' . $count . '</span>';
             $html .= '</a>';
@@ -205,6 +224,16 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
 
 .group-icon { font-size: 1rem; width: 20px; text-align: center; color: var(--text-muted); }
 .sidebar-group.active .group-icon { color: white; }
+
+/* Thumbnail image in sidebar */
+.sidebar-thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: #f0f2f5;
+}
 .group-name {
     font-weight: 600;
     font-size: 0.88rem;
