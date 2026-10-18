@@ -853,7 +853,7 @@ function showHome(int $page): void
     </div>
     <div class="groups-grid">
         <?php foreach ($groups as $prefix => $count): ?>
-        <a href="?action=group&prefix=<?= urlencode($prefix) ?>" class="group-card">
+        <a href="?action=group&prefix=<?= urlencode((string)$prefix) ?>" class="group-card">
             <span class="group-code"><?= h($prefix) ?></span>
             <span class="group-count"><?= $count ?> منتج</span>
         </a>
@@ -916,7 +916,7 @@ function showGroup(string $prefix, int $page): void
     
     <div class="filter-tabs">
         <?php foreach (['الكل' => '', 'Running' => 'Running', 'New Model' => 'New+Model', 'Slow Moving' => 'Slow+Moving', 'Aging' => 'Aging'] as $label => $val): ?>
-        <a href="?action=group&prefix=<?= urlencode($prefix) ?>&status=<?= urlencode($val) ?>" 
+        <a href="?action=group&prefix=<?= urlencode((string)$prefix) ?>&status=<?= urlencode((string)$val) ?>" 
            class="filter-tab"><?= $label ?></a>
         <?php endforeach; ?>
     </div>
@@ -929,7 +929,7 @@ function showGroup(string $prefix, int $page): void
         $paged = array_values($paged);
     }
     
-    renderProducts($paged, $page, $totalPages, '?action=group&prefix=' . urlencode($prefix) . '&status=' . urlencode($statusFilter));
+    renderProducts($paged, $page, $totalPages, '?action=group&prefix=' . urlencode((string)$prefix) . '&status=' . urlencode((string)$statusFilter));
     
     layout('مجموعة ' . $prefix, ob_get_clean());
 }
@@ -968,7 +968,7 @@ function showSearch(string $q, int $page): void
     </div>
     <?php
     
-    renderProducts($paged, $page, $totalPages, '?action=search&q=' . urlencode($q));
+    renderProducts($paged, $page, $totalPages, '?action=search&q=' . urlencode((string)$q));
     
     layout('بحث: ' . $q, ob_get_clean());
 }
@@ -985,7 +985,7 @@ function showProduct(int $id): void
     
     ob_start();
     ?>
-    <a href="?action=group&prefix=<?= urlencode($group) ?>" class="back-link">→ العودة لمجموعة <?= h($group) ?></a>
+    <a href="?action=group&prefix=<?= urlencode((string)$group) ?>" class="back-link">→ العودة لمجموعة <?= h($group) ?></a>
     
     <div class="section-header">
         <h2 class="section-title">
@@ -1078,7 +1078,7 @@ function showProduct(int $id): void
             <div class="detail-row">
                 <div class="detail-label">مجموعة الكود</div>
                 <div class="detail-value">
-                    <a href="?action=group&prefix=<?= urlencode($group) ?>"><?= h($group) ?></a>
+                    <a href="?action=group&prefix=<?= urlencode((string)$group) ?>"><?= h($group) ?></a>
                 </div>
             </div>
             <div class="detail-row">
