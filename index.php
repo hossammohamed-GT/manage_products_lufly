@@ -2,6 +2,24 @@
 declare(strict_types=1);
 require __DIR__.'/app.php';
 
+// Authentication check
+$config = require __DIR__.'/config.php';
+$appPassword = $config['app_password'] ?? '';
+
+if ($appPassword !== '') {
+    if (empty($_SESSION['lufly_auth']) || $_SESSION['lufly_auth'] !== true) {
+        header('Location: login.php');
+        exit;
+    }
+    
+    // Session timeout after 8 hours
+    if (isset($_SESSION['lufly_login_time']) && (time() - $_SESSION['lufly_login_time'] > 28800)) {
+        session_destroy();
+        header('Location: login.php');
+        exit;
+    }
+}
+
 $action = $_GET['action'] ?? 'home';
 $page = max(1, (int)($_GET['page'] ?? 1));
 
@@ -52,6 +70,14 @@ try {
         }
         exit;
     }
+
+    // Logout
+    if ($action === 'logout') {
+        session_destroy();
+        header('Location: login.php');
+        exit;
+    }
+
     if ($action === 'api_products' && $_SERVER['REQUEST_METHOD'] === 'GET') {
         header('Content-Type: application/json; charset=utf-8');
         try {
@@ -257,6 +283,8 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .top-header .logo { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); }
 .top-header .logo img { height: 36px; }
 .top-header .logo-text { font-weight: 800; font-size: 1.1rem; color: var(--primary); letter-spacing: 1px; }
+.top-header .logout-btn { color: var(--text-muted); text-decoration: none; font-size: 1.2rem; transition: color 0.2s; }
+.top-header .logout-btn:hover { color: var(--danger); }
 .top-nav { display: flex; gap: 6px; }
 .top-nav a { color: var(--text-muted); text-decoration: none; padding: 8px 14px; border-radius: 8px; font-size: 0.9rem; transition: all 0.2s; cursor: pointer; }
 .top-nav a:hover, .top-nav a.active { background: var(--primary-light); color: var(--primary); }
@@ -784,6 +812,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
         <img src="<?= h($config['logo_path'] ?? 'assets/logo.png') ?>" alt="LUFLY">
         <span class="logo-text"><?= h($siteTitle) ?></span>
     </a>
+    <a href="?action=logout" class="logout-btn" title="تسجيل الخروج"><i class="fas fa-sign-out-alt"></i></a>
 </div>
 
 <!-- ══ HERO BANNER ═══ -->

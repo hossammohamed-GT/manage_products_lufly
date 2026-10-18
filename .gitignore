@@ -1,10 +1,20 @@
-/google_drive/
+# Environment file (contains credentials)
+.env
 /config.local.php
+
+# Uploads
 /uploads/*
 !/uploads/.htaccess
 !/uploads/.gitkeep
-/data/*.lock
 
+# Data
+/data/*.lock
+/data/*.sqlite*
+
+# Google Drive
+/google_drive/
+
+# Python
 __pycache__/
 *.py[cod]
-/data/*.sqlite*
+.venv/
