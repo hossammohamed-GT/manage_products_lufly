@@ -673,10 +673,6 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
         <img src="<?= h($config['logo_path'] ?? 'assets/logo.png') ?>" alt="LUFLY">
         <span class="logo-text"><?= h($siteTitle) ?></span>
     </a>
-    <nav class="top-nav">
-        <a href="?action=home" class="<?= $action==='home'?'active':'' ?>"><i class="fas fa-home"></i> الرئيسية</a>
-        <a href="#" onclick="showSettingsModal()"><i class="fas fa-cog"></i> الإعدادات</a>
-    </nav>
 </div>
 
 <!-- ══ HERO BANNER ═══ -->
@@ -1067,7 +1063,7 @@ function deleteProduct(id) {
 </script>
 <?php
 
-// ─── HOME ──────────────────────────────────────────────────
+// ── HOME ──────────────────────────────────────────────────
 function showHome(int $page): void {
     $d = db();
     $allProducts = allProducts($d, false);
@@ -1078,13 +1074,7 @@ function showHome(int $page): void {
     }
     arsort($groups);
     
-    $statusFilter = $_GET['status'] ?? '';
-    $filtered = $statusFilter ? array_filter($allProducts, fn($p) => $p['status'] === $statusFilter) : $allProducts;
-    $filtered = array_values($filtered);
-    
-    $sortBy = $_GET['sort'] ?? 'id';
-    if ($sortBy === 'code') usort($filtered, fn($a,$b) => strcmp($a['code'], $b['code']));
-    elseif ($sortBy === 'status') usort($filtered, fn($a,$b) => strcmp($a['status'], $b['status']));
+    $filtered = array_values($allProducts);
     
     $perPage = 12;
     $total = count($filtered);
@@ -1097,26 +1087,9 @@ function showHome(int $page): void {
     <div class="toolbar">
         <div class="toolbar-title">تصفح كل المنتجات</div>
         <div class="toolbar-count"><?= $total ?> منتج</div>
-        <select class="toolbar-select" onchange="location='?action=home&status='+this.value+'&sort=<?= h($sortBy) ?>'">
-            <option value="">كل الحالات</option>
-            <?php foreach (STATUSES as $s): ?>
-            <option value="<?= h($s) ?>" <?= $statusFilter===$s?'selected':'' ?>><?= h($s) ?></option>
-            <?php endforeach; ?>
-        </select>
-        <select class="toolbar-select" onchange="location='?action=home&status=<?= h($statusFilter) ?>&sort='+this.value">
-            <option value="id" <?= $sortBy==='id'?'selected':'' ?>>الأحدث</option>
-            <option value="code" <?= $sortBy==='code'?'selected':'' ?>>حسب الكود</option>
-            <option value="status" <?= $sortBy==='status'?'selected':'' ?>>حسب الحالة</option>
-        </select>
     </div>
     
-    <div class="filter-tabs">
-        <?php foreach (['الكل'=>'','Running'=>'Running','New Model'=>'New+Model','Slow Moving'=>'Slow+Moving','Aging'=>'Aging'] as $label=>$val): ?>
-        <a href="?action=home&status=<?= urlencode($val) ?>" class="filter-tab <?= $statusFilter===$val?'active':'' ?>"><?= $label ?></a>
-        <?php endforeach; ?>
-    </div>
-    
-    <?php renderProducts($paged, $page, $totalPages, '?action=home&status='.urlencode($statusFilter).'&sort='.urlencode($sortBy)); ?>
+    <?php renderProducts($paged, $page, $totalPages, '?action=home'); ?>
     <?php
     
     layout('الرئيسية', ob_get_clean(), $groups, '', (string)($action ?? 'home'));
@@ -1127,9 +1100,6 @@ function showGroup(string $prefix, int $page): void {
     $d = db();
     $allProducts = allProducts($d, false);
     $filtered = array_values(array_filter($allProducts, fn($p) => $p['group'] === $prefix));
-    
-    $statusFilter = $_GET['status'] ?? '';
-    if ($statusFilter) $filtered = array_values(array_filter($filtered, fn($p) => $p['status'] === $statusFilter));
     
     $perPage = 12;
     $total = count($filtered);
@@ -1144,13 +1114,7 @@ function showGroup(string $prefix, int $page): void {
         <div class="toolbar-count"><?= $total ?> منتج</div>
     </div>
     
-    <div class="filter-tabs">
-        <?php foreach (['الكل'=>'','Running'=>'Running','New Model'=>'New+Model','Slow Moving'=>'Slow+Moving','Aging'=>'Aging'] as $label=>$val): ?>
-        <a href="?action=group&prefix=<?= urlencode((string)$prefix) ?>&status=<?= urlencode($val) ?>" class="filter-tab <?= $statusFilter===$val?'active':'' ?>"><?= $label ?></a>
-        <?php endforeach; ?>
-    </div>
-    
-    <?php renderProducts($paged, $page, $totalPages, '?action=group&prefix='.urlencode((string)$prefix).'&status='.urlencode($statusFilter)); ?>
+    <?php renderProducts($paged, $page, $totalPages, '?action=group&prefix='.urlencode((string)$prefix)); ?>
     <?php
     
     $groups = getGroups($d);
