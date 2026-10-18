@@ -1,0 +1,82 @@
+{
+  "files": [
+    {
+      "file": "AB229200_part1.xlsx",
+      "products": 122,
+      "attachments": 205,
+      "anchors": 205,
+      "columns": {
+        "D": 122,
+        "E": 74,
+        "G": 9
+      },
+      "embedded_media_files": 176
+    },
+    {
+      "file": "AB229200_part2.xlsx",
+      "products": 122,
+      "attachments": 264,
+      "anchors": 264,
+      "columns": {
+        "G": 40,
+        "D": 120,
+        "E": 104
+      },
+      "embedded_media_files": 219
+    },
+    {
+      "file": "AB229200_part3.xlsx",
+      "products": 122,
+      "attachments": 247,
+      "anchors": 247,
+      "columns": {
+        "D": 122,
+        "E": 115,
+        "G": 10
+      },
+      "embedded_media_files": 174
+    },
+    {
+      "file": "AB229200_part4.xlsx",
+      "products": 122,
+      "attachments": 287,
+      "anchors": 287,
+      "columns": {
+        "D": 124,
+        "E": 137,
+        "G": 26
+      },
+      "embedded_media_files": 214
+    },
+    {
+      "file": "AB229200_part5.xlsx",
+      "products": 105,
+      "attachments": 207,
+      "anchors": 207,
+      "columns": {
+        "D": 101,
+        "E": 80,
+        "G": 26
+      },
+      "embedded_media_files": 173
+    },
+    {
+      "file": "AB229200_part6.xlsx",
+      "products": 122,
+      "attachments": 255,
+      "anchors": 255,
+      "columns": {
+        "D": 123,
+        "E": 107,
+        "G": 25
+      },
+      "embedded_media_files": 195
+    }
+  ],
+  "total_products": 715,
+  "total_attachments": 1465,
+  "unique_assets": 1148,
+  "unassigned": [],
+  "mapping": "Excel drawing anchor top-left row; all columns retained. No product or attachment deduplication.",
+  "image_conversion": "Raster images converted to WebP quality 94, original pixel dimensions retained. Non-raster files preserved."
+}

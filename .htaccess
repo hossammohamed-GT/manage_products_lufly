@@ -1,0 +1,4 @@
+Options -Indexes
+<FilesMatch "^(config(\.local)?|app)\.php$">
+ Require all denied
+</FilesMatch>

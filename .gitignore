@@ -1,0 +1,10 @@
+/google_drive/
+/config.local.php
+/uploads/*
+!/uploads/.htaccess
+!/uploads/.gitkeep
+/data/*.lock
+
+__pycache__/
+*.py[cod]
+/data/*.sqlite*
