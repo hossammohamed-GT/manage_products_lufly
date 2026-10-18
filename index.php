@@ -372,6 +372,22 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     z-index: 2;
 }
 
+/* Code Badge */
+.code-badge {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    background: rgba(31, 158, 158, 0.9);
+    color: white;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-family: 'Consolas', monospace;
+    z-index: 2;
+    backdrop-filter: blur(4px);
+}
+
 /* Card Body */
 .product-card-body { padding: 16px; flex: 1; display: flex; flex-direction: column; gap: 12px; }
 
@@ -776,12 +792,12 @@ window.inlineEdit = function(el, field, productId, productVersion) {
 // ═══ LIGHTBOX ═══
 const lbState = { idx: 0, total: 0, productId: 0, images: [], mediaIds: [] };
 
-window.openLightbox = function(idx, total, productId, images, mediaIds) {
+window.openLightbox = function(idx, total, productId, images) {
     lbState.idx = idx;
     lbState.total = total;
     lbState.productId = productId;
     lbState.images = images;
-    lbState.mediaIds = mediaIds;
+    lbState.mediaIds = []; // Will be populated if needed
     updateLightbox();
     document.getElementById('lightbox').classList.add('active');
     document.body.style.overflow = 'hidden';
@@ -897,6 +913,24 @@ document.addEventListener('keydown', function(e) {
 document.getElementById('lightbox').addEventListener('click', function(e) {
     if (e.target === this) closeLightbox();
 });
+
+// Handle lightbox triggers
+document.addEventListener('click', function(e) {
+    const trigger = e.target.closest('.lightbox-trigger');
+    if (!trigger) return;
+    
+    const card = trigger.closest('.product-card');
+    const productId = parseInt(trigger.dataset.product);
+    const idx = parseInt(trigger.dataset.idx);
+    
+    // Get all images from this card
+    const images = Array.from(card.querySelectorAll('.lightbox-trigger')).map(img => img.src);
+    const total = images.length;
+    
+    if (total > 0) {
+        openLightbox(idx, total, productId, images);
+    }
+});
 </script>
 <meta name="csrf" content="<?= h(csrf()) ?>">
 </body>
@@ -915,7 +949,7 @@ function productCardHTML(array $p): string {
     $carouselDots = '';
     $mediaIds = [];
     foreach ($previewable as $i => $m) {
-        $carouselImgs .= '<img src="'.h($m['path']).'" onclick="openLightbox('. $i.', '.count($previewable).', '.$p['id'].', '.json_encode(array_map(fn($x)=>h($x['path']), $previewable)).', '.json_encode(array_map(fn($x)=>(int)$x['id'], $previewable)).')">';
+        $carouselImgs .= '<img src="'.h($m['path']).'" data-idx="'.$i.'" data-product="'.$p['id'].'" class="lightbox-trigger">';
         $carouselDots .= '<span class="carousel-dot'.($i===0?' active':'').'"></span>';
         $mediaIds[] = (int)$m['id'];
     }
@@ -936,6 +970,7 @@ function productCardHTML(array $p): string {
         .'<div class="card-carousel-imgs">'.$carouselImgs.$noImage.'</div>'
         .$carouselBtns
         .'<span class="status-badge '.$statusClass.'">'.$statusText.'</span>'
+        .'<span class="code-badge"><i class="fas fa-hashtag"></i> '.h($p['code']?:'—').'</span>'
         .'<span class="media-count"><i class="fas fa-paperclip"></i> '.count($previewable).'</span>'
         .'</div>'
         .'<div class="product-card-body">'
