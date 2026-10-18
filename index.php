@@ -134,7 +134,7 @@ try {
                 if ($op === 'delete') {
                     $m = run($d, 'SELECT * FROM media WHERE id=? AND product_id=?', [$mediaId, $productId])->fetch();
                     if (!$m) throw new RuntimeException('الصورة غير موجودة');
-                    @unlink(__DIR__.'/'.ltrim($m['path'],'/'));
+                    deleteMediaFile($d, $m['path']);
                     run($d, 'DELETE FROM media WHERE id=?', [$mediaId]);
                     echo json_encode(['ok'=>true, 'op'=>'delete', 'media_id'=>$mediaId]);
                 } else {
@@ -160,12 +160,12 @@ try {
                     $sha = hash_file('sha256', __DIR__.'/'.ltrim($newPath,'/'));
                     $origName = substr(basename(str_replace('\\','/',$f['name'])),0,240);
                     
-                    if ($op === 'replace') {
-                        $m = run($d, 'SELECT * FROM media WHERE id=? AND product_id=?', [$mediaId, $productId])->fetch();
-                        if (!$m) { @unlink(__DIR__.'/'.ltrim($newPath,'/')); throw new RuntimeException('الصورة غير موجودة'); }
-                        @unlink(__DIR__.'/'.ltrim($m['path'],'/'));
-                        run($d, 'UPDATE media SET path=?, sha256=?, kind=?, original_name=? WHERE id=?', [$newPath, $sha, $kind, $origName, $mediaId]);
-                        echo json_encode(['ok'=>true, 'op'=>'replace', 'media_id'=>$mediaId, 'path'=>$newPath]);
+            if ($op === 'replace') {
+                $m = run($d, 'SELECT * FROM media WHERE id=? AND product_id=?', [$mediaId, $productId])->fetch();
+                if (!$m) { @unlink(__DIR__.'/'.ltrim($newPath,'/')); throw new RuntimeException('الصورة غير موجودة'); }
+                deleteMediaFile($d, $m['path']);
+                run($d, 'UPDATE media SET path=?, sha256=?, kind=?, original_name=? WHERE id=?', [$newPath, $sha, $kind, $origName, $mediaId]);
+                echo json_encode(['ok'=>true, 'op'=>'replace', 'media_id'=>$mediaId, 'path'=>$newPath]);
                     } else {
                         $maxSort = (int)$d->query('SELECT MAX(sort_order) FROM media WHERE product_id='.$productId)->fetchColumn();
                         run($d, 'INSERT INTO media (product_id,path,original_name,kind,caption,sort_order,previewable,sha256) VALUES (?,?,?,?,?,?,1,?)',
@@ -205,11 +205,12 @@ try {
         case 'delete':
             if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 checkCsrf();
+                $d = db();
                 $id = (int)($_POST['id'] ?? 0);
                 if ($id) {
-                    $media = mediaFor(db(), $id);
-                    foreach ($media as $m) @unlink(__DIR__ . '/' . $m['path']);
-                    run(db(), 'DELETE FROM products WHERE id=?', [$id]);
+                    $media = mediaFor($d, $id);
+                    foreach ($media as $m) deleteMediaFile($d, $m['path']);
+                    run($d, 'DELETE FROM products WHERE id=?', [$id]);
                     flash('تم الحذف نهائياً');
                 }
                 go('?action=home');

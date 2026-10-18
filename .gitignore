@@ -1,5 +1,6 @@
-# Environment file (contains credentials)
+# Environment file (contains credentials - NEVER commit)
 .env
+!/.env.example
 /config.local.php
 
 # Uploads

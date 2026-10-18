@@ -66,6 +66,7 @@ function install(): void {
   foreach(explode(';',$sql) as $part) if(trim($part)!=='' && !preg_match('/^\s*(CREATE DATABASE|USE )/i',$part)) $db->exec($part);
   // Ensure verified column exists (for existing databases)
   try { $db->exec('ALTER TABLE products ADD COLUMN verified INT NOT NULL DEFAULT 0'); } catch (Throwable $e) {}
+  try { $db->exec('ALTER TABLE products ADD INDEX idx_verified (verified)'); } catch (Throwable $e) {}
  } else {
   // Ensure SQLite directory exists
   $sqliteDir=dirname($config['sqlite_path']);
@@ -138,3 +139,19 @@ function allProducts(PDO $db,bool $archived=false): array {
  return $rows;
 }
 function mediaLabel(string $kind): string { return ['photo'=>'صورة المنتج','drawing'=>'رسم فني','extra'=>'صورة إضافية'][$kind]??'مرفق'; }
+
+// Safely delete a media file only if no other product uses it
+function deleteMediaFile(PDO $db, string $path): void {
+    $normalizedPath = ltrim(str_replace('\\', '/', $path), '/');
+    
+    // Check if any other media record uses this same file
+    $usedElsewhere = (int)run($db, 'SELECT COUNT(*) FROM media WHERE path=?', [$normalizedPath])->fetchColumn();
+    
+    if ($usedElsewhere === 0) {
+        // No other references, safe to delete the physical file
+        $fullPath = __DIR__ . '/' . $normalizedPath;
+        if (is_file($fullPath)) {
+            @unlink($fullPath);
+        }
+    }
+}
