@@ -132,8 +132,11 @@ try {
 // PAGE FUNCTIONS
 // ═══════════════════════════════════════════════════════════
 
-function layout(string $title, string $content, string $extraHead = '', string $extraJs = ''): void
+function layout(string $title, string $content, string $extraHead = '', string $extraJs = '', array $groups = []): void
 {
+    require_once __DIR__.'/includes/sidebar.php';
+    $sidebarHtml = !empty($groups) ? renderSidebar($groups, (string)($_GET['prefix'] ?? '')) : '';
+    $useSidebar = !empty($groups);
     $d = db();
     $siteTitle = setting($d, 'site_title', 'LUFLY Catalog');
     $primary = setting($d, 'primary_color', '#1F9E9E');
@@ -726,14 +729,37 @@ body {
     </div>
 </div>
 
+<?php if ($useSidebar): ?>
+<div class="main-layout">
+    <?= $sidebarHtml ?>
+    <div class="main-content">
+        <?php if ($flash): ?>
+            <div class="flash"><?= h($flash) ?></div>
+        <?php endif; ?>
+        <?= $content ?>
+    </div>
+</div>
+<?php else: ?>
 <div class="container">
     <?php if ($flash): ?>
         <div class="flash"><?= h($flash) ?></div>
     <?php endif; ?>
     <?= $content ?>
 </div>
+<?php endif; ?>
 
 <?= $extraJs ?>
+<script>
+if (document.getElementById('sidebarSearch')) {
+    document.getElementById('sidebarSearch').addEventListener('input', function(e) {
+        const query = e.target.value.toLowerCase();
+        document.querySelectorAll('.sidebar-group').forEach(el => {
+            const prefix = el.getAttribute('data-prefix').toLowerCase();
+            el.style.display = prefix.includes(query) ? 'flex' : 'none';
+        });
+    });
+}
+</script>
 </body>
 </html>
     <?php
@@ -931,7 +957,9 @@ function showGroup(string $prefix, int $page): void
     
     renderProducts($paged, $page, $totalPages, '?action=group&prefix=' . urlencode((string)$prefix) . '&status=' . urlencode((string)$statusFilter));
     
-    layout('مجموعة ' . $prefix, ob_get_clean());
+    // Build groups for sidebar
+    $groups = getGroups($d);
+    layout('مجموعة ' . $prefix, ob_get_clean(), '', '', $groups);
 }
 
 // ─── PAGE: Search ──────────────────────────────────────────
@@ -970,7 +998,9 @@ function showSearch(string $q, int $page): void
     
     renderProducts($paged, $page, $totalPages, '?action=search&q=' . urlencode((string)$q));
     
-    layout('بحث: ' . $q, ob_get_clean());
+    // Build groups for sidebar
+    $groups = getGroups($d);
+    layout('بحث: ' . $q, ob_get_clean(), '', '', $groups);
 }
 
 // ─── PAGE: View Product ───────────────────────────────────
@@ -1263,7 +1293,9 @@ function showArchive(int $page): void
         }
     }
     
-    layout('الأرشيف', ob_get_clean());
+    // Build groups for sidebar
+    $groups = getGroups($d);
+    layout('الأرشيف', ob_get_clean(), '', '', $groups);
 }
 
 // ─── PAGE: Settings ───────────────────────────────────────
