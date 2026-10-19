@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-// Opt-in migration only. Existing file stores and SQL data are never overwritten.
+
 if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
 if (in_array('--help', $argv, true)) {
     echo "Usage: php tools/export_local_json.php [new-path-ending-in.php]\n";
@@ -10,7 +10,7 @@ $temporary = null;
 $exitCode = 0;
 try {
     require dirname(__DIR__) . '/app.php';
-    // Read the SQL configuration, before app.php's auto/files selection.
+
     $source = require dirname(__DIR__) . '/config.php';
     if (is_file(dirname(__DIR__) . '/config.local.php')) $source = array_replace($source, require dirname(__DIR__) . '/config.local.php');
     $source['storage_mode'] = 'database';

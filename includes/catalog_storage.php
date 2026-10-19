@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-/** Auto detection uses server/peer addresses, never the client-controlled Host header alone. */
+
 function catalogDriver(array $config, array $server, string $sapi): string
 {
     $mode = $config['storage_mode'] ?? 'auto';
@@ -25,7 +25,7 @@ function catalogDriver(array $config, array $server, string $sapi): string
     return $local ? 'json' : $driver;
 }
 
-/** Minimal record API shared by SQL and local files; JSON never interprets SQL. */
+
 function catalogColumns(string $table): array
 {
     return match ($table) {
@@ -90,10 +90,7 @@ function catalogDelete(PDO|JsonCatalogStore $db, string $table, array $criteria)
     return run($db, 'DELETE FROM ' . $table . catalogWhere($table, $criteria, $params), $params)->rowCount();
 }
 
-/**
- * Guarded JSON snapshot, not a database/SQL emulator. The stable sidecar lock is
- * held from read through atomic rename. Transactions re-read after acquiring it.
- */
+
 final class JsonCatalogStore
 {
     public const HEADER = "<?php http_response_code(404); exit; __halt_compiler();\n";

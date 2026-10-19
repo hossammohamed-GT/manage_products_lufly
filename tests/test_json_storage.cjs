@@ -1,4 +1,3 @@
-/** Optional dependencies and runtime setup: see TESTING.md. No live data is used. */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -23,7 +22,7 @@ async function post(action, body, ok=true) {
     assert.equal(response.json.ok,ok,response.text);return response.json;
 }
 async function evaluate(code) {
-    const response = await php.run({code:'<?php require "/app/app.php"; require_once "/app/includes/image_enhancement.php"; $d=db(); '+code});
+    const response = await php.run({code:'<?php require "/app/app.php"; $d=db(); '+code});
     assert.equal(response.errors,'',response.errors);assert.equal(response.exitCode,0,response.text);
     return response.text ? response.json : undefined;
 }
@@ -35,7 +34,7 @@ async function main() {
     const wasm=path.dirname(require.resolve(modules ? path.join(modules,runtime) : runtime));
     php=new PHP(await loadNodeRuntime(version,{emscriptenOptions:{processId:1,locateFile:file=>path.isAbsolute(file)?file:path.join(wasm,'asyncify',file)}}));
     for (const dir of ['includes','data','assets/catalog','uploads']) php.mkdir('/app/'+dir);
-    for (const file of ['app.php','config.php','index.php','login.php','includes/sidebar.php','includes/catalog_storage.php','includes/image_enhancement.php','data/catalog.json','.env.example']) php.writeFile('/app/'+file,fs.readFileSync(path.join(root,file)));
+    for (const file of ['app.php','config.php','index.php','login.php','includes/sidebar.php','includes/catalog_storage.php','data/catalog.json','.env.example']) php.writeFile('/app/'+file,fs.readFileSync(path.join(root,file)));
     php.writeFile('/app/config.local.php',"<?php return ['storage_mode'=>'files','driver'=>'mysql','host'=>'unreachable.invalid','sqlite_path'=>'/app/data/old.sqlite','app_password'=>'test-files'];");
     php.writeFile('/app/data/old.sqlite','Existing database must never be opened, rewritten or removed');
     server=new PHPRequestHandler({php,documentRoot:'/app',absoluteUrl:'http://lufly.test'});
@@ -91,32 +90,11 @@ async function main() {
         media=await upload(100001,'replace',media.media_id);assert.notEqual(media.path,old);assert.equal(php.fileExists('/app/'+old),false);
         assert.equal(await evaluate(`echo json_encode(catalogRow($d,'media',['id'=>${media.media_id}])['path']);`),media.path);
     });
-    await check('image enhancement preview, cancel and approval work with JSON storage',async()=>{
-        const before=snapshot();let preview=await post('enhancement_create',{product_id:'100001',media_id:String(media.media_id)});assert.deepEqual(snapshot(),before);
-        await post('enhancement_cancel',{token:preview.token});assert.deepEqual(snapshot(),before);
-        preview=await post('enhancement_create',{product_id:'100001',media_id:String(media.media_id)});
-        const old=media.path;media=await post('enhancement_approve',{token:preview.token});assert.match(media.path,/^uploads\/local\//);assert.notEqual(media.path,old);
-        assert.equal(php.fileExists('/app/'+old),false);
-        await post('enhancement_approve',{token:preview.token},false);
-    });
-    if (process.env.LUFLY_TEST_PYTHON && process.env.LUFLY_TEST_X4_MODEL) await check('real EDSR x4 preview/download/cancel/approval persist losslessly in files mode without SQL',async()=>{
-        await require('./ai_bridge.cjs')(php);
-        const config=php.readFileAsText('/app/config.local.php');
-        php.writeFile('/app/config.local.php',config.replace("'storage_mode'=>'files'","'enhancement_python'=>'/test-python','enhancement_x4_model'=>'/test-x4-model','storage_mode'=>'files'"));
-        try {
-            const before=snapshot(), fields={product_id:'100001',media_id:String(media.media_id),profile:'ai4'};
-            const preview=await post('enhancement_create',fields);
-            assert.equal(preview.scale,4);assert.equal(preview.width,160);assert.equal(preview.height,128);
-            assert.deepEqual(snapshot(),before);
-            const downloaded=await server.request({url:'/index.php'+preview.download_url});
-            assert.match(downloaded.headers['content-disposition'][0],/attachment/);
-            await post('enhancement_cancel',{token:preview.token});assert.deepEqual(snapshot(),before);
-            const second=await post('enhancement_create',fields);
-            const output=await server.request({url:'/index.php'+second.download_url});
-            media=await post('enhancement_approve',{token:second.token});
-            assert.match(media.path,/^uploads\/local\//);
-            assert.deepEqual(Buffer.from(php.readFileAsBuffer('/app/'+media.path)),Buffer.from(output.bytes));
-        } finally {php.writeFile('/app/config.local.php',config);}
+    await check('file mode exposes image CRUD without removed processing controls or handlers',async()=>{
+        const before=snapshot(), page=await request();
+        assert.doesNotMatch(page.text,/lbEnhance|enhancement-panel|FSRCNN|EDSR|تحسين الصورة/);
+        for(const action of ['enhancement_create','enhancement_preview','enhancement_approve','enhancement_cancel']) assert.equal((await request(action,{product_id:'100001',media_id:String(media.media_id)})).httpStatusCode,404);
+        assert.deepEqual(snapshot(),before);
     });
     await check('shared images survive deleting a product and disappear after the final reference',async()=>{
         await evaluate(`catalogInsert($d,'media',['product_id'=>100002,'path'=>'${media.path}','original_name'=>'shared.png']);`);

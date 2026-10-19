@@ -1,7 +1,3 @@
--- LUFLY Catalog Database Schema
--- This file is executed once during installation
-
--- Products table
 CREATE TABLE IF NOT EXISTS products (
     id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     code VARCHAR(190) NOT NULL DEFAULT '',
@@ -21,8 +17,6 @@ CREATE TABLE IF NOT EXISTS products (
     INDEX idx_archived (archived),
     INDEX idx_verified (verified)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Media table (product images and attachments)
 CREATE TABLE IF NOT EXISTS media (
     id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     product_id INT NOT NULL,
@@ -40,8 +34,6 @@ CREATE TABLE IF NOT EXISTS media (
     INDEX idx_kind (kind),
     INDEX idx_previewable (previewable)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Settings table (key-value pairs for app settings)
 CREATE TABLE IF NOT EXISTS settings (
     name VARCHAR(100) NOT NULL PRIMARY KEY,
     value TEXT NOT NULL

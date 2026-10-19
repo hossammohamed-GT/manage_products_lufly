@@ -2,9 +2,8 @@
 declare(strict_types=1);
 require __DIR__.'/app.php';
 require_once __DIR__.'/includes/sidebar.php';
-require_once __DIR__.'/includes/image_enhancement.php';
 
-// Authentication check
+
 $appPassword = $config['app_password'] ?? '';
 
 if ($appPassword !== '') {
@@ -12,10 +11,9 @@ if ($appPassword !== '') {
         header('Location: login.php');
         exit;
     }
-    
-    // Session timeout after 8 hours
+
+
     if (isset($_SESSION['lufly_login_time']) && (time() - $_SESSION['lufly_login_time'] > 28800)) {
-        foreach (array_keys($_SESSION['enhancements'] ?? []) as $token) discardEnhancement($token);
         session_destroy();
         header('Location: login.php');
         exit;
@@ -38,48 +36,7 @@ try {
         }
     }
 
-    if ($action === 'enhancement_preview') {
-        try {
-            $preview = enhancementPreview(is_string($_GET['token'] ?? null) ? $_GET['token'] : '');
-            $original = ($_GET['original'] ?? '') === '1';
-            header('Content-Type: ' . ($original ? $preview['mime'] : 'image/png'));
-            header('Cache-Control: private, no-store');
-            if (!$original && ($_GET['download'] ?? '') === '1')
-                header('Content-Disposition: attachment; filename="lufly-high-resolution.png"');
-            readfile($original ? $preview['original_file'] : $preview['enhanced_file']);
-        } catch (Throwable $e) {
-            http_response_code(404);
-            header('Content-Type: text/plain; charset=utf-8');
-            echo $e->getMessage();
-        }
-        exit;
-    }
-    if (in_array($action, ['enhancement_create', 'enhancement_approve', 'enhancement_cancel'], true)) {
-        header('Content-Type: application/json; charset=utf-8');
-        header('Cache-Control: no-store');
-        try {
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') throw new RuntimeException('العملية تتطلب طلب حفظ');
-            checkCsrf();
-            $token = is_string($_POST['token'] ?? null) ? $_POST['token'] : '';
-            if ($action === 'enhancement_create') {
-                $result = createEnhancement(db(), (int)($_POST['product_id'] ?? 0), (int)($_POST['media_id'] ?? 0),
-                    is_string($_POST['profile'] ?? null) ? $_POST['profile'] : 'whiteware');
-            } elseif ($action === 'enhancement_approve') {
-                $result = approveEnhancement(db(), $token);
-            } else {
-                discardEnhancement($token);
-                $result = ['ok'=>true];
-            }
-            echo json_encode($result);
-        } catch (Throwable $e) {
-            if (isset($d) && $d->inTransaction()) $d->rollBack();
-            http_response_code(400);
-            echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
-        }
-        exit;
-    }
 
-    // API endpoints
     if ($action === 'toggle_verify' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Content-Type: application/json; charset=utf-8');
         try {
@@ -125,9 +82,8 @@ try {
         exit;
     }
 
-    // Logout
+
     if ($action === 'logout') {
-        foreach (array_keys($_SESSION['enhancements'] ?? []) as $token) discardEnhancement($token);
         session_destroy();
         header('Location: login.php');
         exit;
@@ -144,7 +100,7 @@ try {
             } else {
                 $filtered = $allProducts;
             }
-            // Build HTML
+
             ob_start();
             foreach ($filtered as $p) {
                 echo productCardHTML($p);
@@ -159,13 +115,13 @@ try {
         exit;
     }
 
-    // API endpoints
+
     if (in_array($action, ['inline_save','media_action']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Content-Type: application/json; charset=utf-8');
         try {
             checkCsrf();
             $d = db();
-            
+
             if ($action === 'inline_save') {
                 $id = (int)($_POST['id'] ?? 0);
                 $field = (string)($_POST['field'] ?? '');
@@ -245,17 +201,17 @@ try {
             http_response_code(400);
             showError('إعادة التثبيت معطّلة لحماية بياناتك من الحذف.');
             break;
-        default: showHome(1);
+        default: http_response_code(404); showError('الصفحة غير موجودة');
     }
 } catch (Throwable $e) {
     showError($e->getMessage());
 }
 
-// ═══════════════════════════════════════════════════════════
+
 function layout(string $title, string $content, array $groups = [], string $extraJs = '', string $action = 'home'): void
 {
     global $config;
-    // Error/setup pages must render even when the database is unavailable.
+
     $d = null;
     try { $d = db(); } catch (Throwable $e) { }
     $siteTitle = $d ? setting($d, 'site_title', 'LUFLY Catalog') : 'LUFLY Catalog';
@@ -293,7 +249,7 @@ function layout(string $title, string $content, array $groups = [], string $extr
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
 
-/* ══ HEADER ═══ */
+
 .top-header {
     background: white;
     border-bottom: 1px solid var(--border);
@@ -314,7 +270,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .top-nav a { color: var(--text-muted); text-decoration: none; padding: 8px 14px; border-radius: 8px; font-size: 0.9rem; transition: all 0.2s; cursor: pointer; }
 .top-nav a:hover, .top-nav a.active { background: var(--primary-light); color: var(--primary); }
 
-/* ═══ HERO BANNER ═══ */
+
 .hero-banner {
     background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
     padding: 40px 24px;
@@ -332,11 +288,11 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .hero-stat-num { font-size: 1.8rem; font-weight: 800; }
 .hero-stat-label { font-size: 0.8rem; opacity: 0.85; }
 
-/* ══ MAIN LAYOUT ══ */
+
 .main-layout { display: flex; max-width: 1400px; margin: 0 auto; gap: 24px; padding: 24px; }
 .main-content { flex: 1; min-width: 0; }
 
-/* ═══ TOOLBAR ═══ */
+
 .toolbar { background: white; border-radius: var(--radius); padding: 16px 20px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
 .toolbar-title { font-weight: 700; font-size: 1.1rem; color: var(--text); }
 .toolbar-count { color: var(--text-muted); font-size: 0.9rem; }
@@ -344,10 +300,10 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .toolbar-search:focus { border-color: var(--primary); }
 .toolbar-select { padding: 10px 14px; border: 2px solid var(--border); border-radius: 10px; font-size: 0.9rem; background: white; outline: none; cursor: pointer; }
 
-/* ═══ FLASH ═══ */
+
 .flash { background: var(--success); color: white; padding: 12px 18px; border-radius: 10px; margin-bottom: 16px; font-weight: 600; font-size: 0.95rem; }
 
-/* ═══ PRODUCTS GRID ══ */
+
 .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 24px; }
 .product-card {
     background: var(--card);
@@ -360,7 +316,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 }
 .product-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
 
-/* Verified state */
+
 .product-card.verified {
     border: 2px solid #10b981;
     box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
@@ -369,7 +325,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     border-bottom: 2px solid #10b981;
 }
 
-/* Verify check icon */
+
 .verify-check {
     position: absolute;
     top: 12px;
@@ -404,7 +360,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     font-weight: 900;
 }
 
-/* Bulk verify bar */
+
 .bulk-verify-bar {
     display: none;
     position: sticky;
@@ -438,7 +394,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .btn-clear-selection { background: rgba(255,255,255,0.2); color: white; }
 .btn-clear-selection:hover { background: rgba(255,255,255,0.3); }
 
-/* Card Image Carousel */
+
 .card-carousel {
     position: relative;
     height: 260px;
@@ -505,7 +461,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     font-size: 3rem;
 }
 
-/* Status Badge */
+
 .status-badge {
     position: absolute;
     top: 12px;
@@ -522,7 +478,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .status-badge.Slow-Moving { background: var(--warning); }
 .status-badge.Aging { background: var(--danger); }
 
-/* Media Count */
+
 .media-count {
     position: absolute;
     bottom: 12px;
@@ -536,7 +492,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     z-index: 2;
 }
 
-/* Code Badge */
+
 .code-badge {
     position: absolute;
     bottom: 12px;
@@ -552,10 +508,10 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     backdrop-filter: blur(4px);
 }
 
-/* Card Body */
+
 .product-card-body { padding: 16px; flex: 1; display: flex; flex-direction: column; gap: 12px; }
 
-/* Inline Editable Fields */
+
 .inline-field {
     padding: 8px 10px;
     border: 1px solid transparent;
@@ -599,7 +555,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     overflow: hidden;
 }
 
-/* Inline Edit Form */
+
 .inline-edit-form {
     display: none;
     position: absolute;
@@ -642,7 +598,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .btn-cancel { background: #f0f2f5; color: var(--text-muted); }
 .btn-cancel:hover { background: #e5e7eb; }
 
-/* Card Footer */
+
 .product-card-footer {
     padding: 12px 16px;
     border-top: 1px solid var(--border);
@@ -669,7 +625,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .card-btn:hover { background: var(--primary); color: white; }
 .card-btn.danger:hover { background: var(--danger); }
 
-/* Upload Button */
+
 .upload-btn {
     padding: 8px 14px;
     background: var(--primary-light);
@@ -689,7 +645,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     color: white;
 }
 
-/* ═══ LIGHTBOX ═══ */
+
 .lightbox {
     display: none;
     position: fixed;
@@ -772,29 +728,8 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     transition: all 0.2s;
     font-family: inherit;
 }
-.lb-enhance { background: #e2f7ef; color: #116348; }
-.lightbox-action-btn[hidden] { display: none; }
-.lightbox-action-btn:disabled { opacity: .55; cursor: wait; }
 .lightbox-actions { max-width: 95vw; flex-wrap: wrap; justify-content: center; }
-.enhancement-panel { width: min(1080px, 90vw); max-height: calc(100dvh - 110px); overflow-y: auto; color: white; padding: 24px; background: #18212b; border: 1px solid #43505e; border-radius: 16px; }
-.enhancement-panel[hidden] { display: none; }
-.enhancement-panel h2 { margin-bottom: 8px; }
-.enhancement-panel p { color: #d5dde6; margin: 12px 0; }
-.enhancement-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.enhancement-compare figure { min-width: 0; }
-.enhancement-compare figcaption { padding: 8px; font-weight: bold; text-align: center; }
-.enhancement-compare img { width: 100%; height: min(48vh, 460px); object-fit: contain; background: #e6e9ec; border-radius: 10px; }
-.enhancement-profile { color: white; font-size: .8rem; display: grid; gap: 4px; }
-.enhancement-profile select { max-width: 260px; padding: 7px; border-radius: 7px; background: #fff; color: #18212b; }
-.enhancement-inspect { margin: 12px 0; font-size: .9rem; }
-.enhancement-viewport { overflow: auto; border-radius: 10px; background: #e6e9ec; }
-.enhancement-compare.actual-size .enhancement-viewport { height: min(48vh, 460px); }
-.enhancement-compare.actual-size img { width: auto; height: auto; max-width: none; display: block; }
-.enhancement-decisions { display: flex; gap: 12px; flex-wrap: wrap; }
 @media (max-width: 650px) {
-    .enhancement-compare { grid-template-columns: 1fr; }
-    .enhancement-compare img { height: 28vh; }
-    .enhancement-panel { padding: 14px; }
     .lightbox-actions { bottom: 12px; gap: 6px; padding: 10px; width: 95vw; }
     .lightbox-action-btn { padding: 10px; }
 }
@@ -814,7 +749,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     border-radius: 20px;
 }
 
-/* ═══ TOAST ═══ */
+
 .toast {
     position: fixed;
     bottom: 24px;
@@ -831,19 +766,19 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .toast.success { background: var(--success); }
 .toast.error { background: var(--danger); }
 
-/* ═══ FILTER TABS ═══ */
+
 .filter-tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
 .filter-tab { padding: 7px 14px; border-radius: 20px; text-decoration: none; font-size: 0.82rem; font-weight: 600; background: white; color: var(--text); box-shadow: var(--shadow); transition: all 0.2s; cursor: pointer; }
 .filter-tab:hover, .filter-tab.active { background: var(--primary); color: white; }
 
-/* ═══ PAGINATION ═══ */
+
 .pagination { display: flex; gap: 6px; justify-content: center; margin-top: 32px; flex-wrap: wrap; }
 .pagination a, .pagination span { padding: 8px 14px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 0.9rem; transition: all 0.2s; }
 .pagination a { background: white; color: var(--text); box-shadow: var(--shadow); }
 .pagination a:hover { background: var(--primary); color: white; }
 .pagination .current { background: var(--primary); color: white; }
 
-/* ═══ RESPONSIVE ═══ */
+
 @media (max-width: 700px) {
     .hero-inner { flex-direction: column; text-align: center; }
     .hero-text h1 { font-size: 1.5rem; }
@@ -857,7 +792,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 </head>
 <body>
 
-<!-- ═══ TOP HEADER ═══ -->
+
 <div class="top-header">
     <a href="?action=home" class="logo">
         <img src="<?= h($config['logo_path'] ?? 'assets/logo.png') ?>" alt="LUFLY">
@@ -867,7 +802,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     <a href="?action=logout" class="logout-btn" title="تسجيل الخروج"><i class="fas fa-sign-out-alt"></i></a>
 </div>
 
-<!-- ══ HERO BANNER ═══ -->
+
 <?php if ($d && in_array($action, ['home','group','search'])): ?>
 <div class="hero-banner">
     <div class="hero-inner">
@@ -899,14 +834,14 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 </div>
 <?php endif; ?>
 
-<!-- ═══ MAIN LAYOUT ═══ -->
+
 <div class="main-layout">
     <?= $sidebarHtml ?>
     <div class="main-content">
         <?php if ($config['driver'] === 'json'): ?><div class="flash">وضع الملفات المحلي — التعديلات محفوظة في JSON مستقل، وليس في قاعدة البيانات.</div><?php endif; ?>
         <?php if ($flash): ?><div class="flash"><?= h($flash) ?></div><?php endif; ?>
-        
-        <!-- Bulk verify bar -->
+
+
         <div class="bulk-verify-bar" id="bulkVerifyBar">
             <span class="count"><i class="fas fa-check-double"></i> تم تحديد <span id="selectedCount">0</span> منتج</span>
             <div class="actions">
@@ -914,7 +849,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
                 <button class="btn-clear-selection" onclick="clearSelection()"><i class="fas fa-times"></i> إلغاء</button>
             </div>
         </div>
-        
+
         <form method="get" class="toolbar" role="search">
             <input type="hidden" name="action" value="search">
             <input type="search" class="toolbar-search" name="q" placeholder="ابحث بالكود أو الوصف أو الماركة" value="<?= h($_GET['q'] ?? '') ?>">
@@ -924,18 +859,17 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     </div>
 </div>
 
-<!-- ═══ LIGHTBOX ═══ -->
+
 <div class="lightbox" id="lightbox">
     <button class="lightbox-close" onclick="closeLightbox()"><i class="fas fa-times"></i></button>
     <span class="lightbox-counter" id="lbCounter"></span>
     <button class="lightbox-nav lightbox-prev" onclick="lbNav(-1)"><i class="fas fa-chevron-right"></i></button>
     <button class="lightbox-nav lightbox-next" onclick="lbNav(1)"><i class="fas fa-chevron-left"></i></button>
     <img class="lightbox-img" id="lbImg" src="" alt="">
-    <section id="lbEnhancement" class="enhancement-panel" hidden aria-label="مقارنة تحسين الصورة" aria-live="polite"></section>
     <div class="lightbox-actions" id="lbActions"></div>
 </div>
 
-<!-- ═══ TOAST ═══ -->
+
 <div id="toast"></div>
 
 <?php sidebarAssets(); ?>
@@ -943,35 +877,35 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 <script>
 const csrfToken = document.querySelector('meta[name="csrf"]')?.content || '';
 
-// ═══ INLINE EDITING ═══
+
 window.inlineEdit = function(el, field, productId, productVersion) {
     const form = el.querySelector('.inline-edit-form');
     if (!form) return;
-    
-    // Hide all other forms
+
+
     document.querySelectorAll('.inline-edit-form.active').forEach(f => {
         if (f !== form) f.classList.remove('active');
     });
-    
+
     form.onclick = event => event.stopPropagation();
     form.classList.add('active');
     const input = form.querySelector('input, textarea, select');
     if (input) input.focus();
-    
+
     const saveBtn = form.querySelector('.btn-save');
     const cancelBtn = form.querySelector('.btn-cancel');
-    
+
     saveBtn.onclick = function() {
         const value = input.value.trim();
-        
+
         const fd = new FormData();
         fd.append('csrf', csrfToken);
         fd.append('id', productId);
         fd.append('field', field);
         fd.append('value', value);
-        
+
         showToast('جاري الحفظ...');
-        
+
         fetch('?action=inline_save', { method:'POST', body: fd })
         .then(r => r.json())
         .then(data => {
@@ -1001,19 +935,16 @@ window.inlineEdit = function(el, field, productId, productVersion) {
         })
         .catch(() => showToast('خطأ في الاتصال', 'error'));
     };
-    
+
     cancelBtn.onclick = function() {
         form.classList.remove('active');
     };
 };
 
-// ═══ LIGHTBOX ═══
+
 const lbState = { idx: 0, total: 0, productId: 0, images: [], mediaIds: [] };
-let enhancementState = null;
 
 window.openLightbox = function(idx, total, productId, images, mediaIds) {
-    if (enhancementState?.saving) return;
-    if (enhancementState) cancelEnhancement();
     lbState.idx = idx;
     lbState.total = total;
     lbState.productId = productId;
@@ -1028,14 +959,6 @@ function updateLightbox() {
     document.getElementById('lbImg').src = lbState.images[lbState.idx];
     document.getElementById('lbCounter').textContent = (lbState.idx + 1) + ' / ' + lbState.total;
     document.getElementById('lbActions').innerHTML = `
-        <label class="enhancement-profile">نوع التحسين
-            <select id="lbEnhanceProfile">
-                <option value="whiteware">منتجات بيضاء — تحسين قوي محلي</option>
-                <option value="ai4" <?= enhancementAiConfigured('ai4') ? 'selected' : '' ?>>High Resolution ×4 — EDSR <?= enhancementAiConfigured('ai4') ? '(جاهز)' : '(يحتاج تنزيل الموديل)' ?></option>
-                <option value="ai" <?= enhancementAiConfigured() && !enhancementAiConfigured('ai4') ? 'selected' : '' ?>>AI ×2 — <?= enhancementAiConfigured() ? 'مُعدّ على السيرفر' : 'يحتاج إعداد Python' ?></option>
-            </select>
-        </label>
-        <button class="lightbox-action-btn lb-enhance" onclick="enhanceImage()"><i class="fas fa-wand-magic-sparkles"></i> تحسين الصورة</button>
         <button class="lightbox-action-btn lb-replace" onclick="triggerReplace()"><i class="fas fa-sync-alt"></i> استبدال</button>
         <button class="lightbox-action-btn lb-delete" onclick="deleteImage()"><i class="fas fa-trash"></i> حذف</button>
         <form class="lightbox-replace-form" id="lbReplaceForm" style="display:none;">
@@ -1049,14 +972,12 @@ function updateLightbox() {
 }
 
 window.closeLightbox = function() {
-    if (enhancementState?.saving) { showToast('جاري اعتماد التحسين، انتظر لحظة'); return; }
-    if (enhancementState) cancelEnhancement();
     document.getElementById('lightbox').classList.remove('active');
     document.body.style.overflow = '';
 };
 
 window.lbNav = function(dir) {
-    if (enhancementState || !lbState.total) return;
+    if (!lbState.total) return;
     lbState.idx = (lbState.idx + dir + lbState.total) % lbState.total;
     updateLightbox();
 };
@@ -1070,7 +991,7 @@ window.cancelReplace = function() {
     document.getElementById('lbReplaceForm').style.display = 'none';
 };
 
-// Keep the card and lightbox in sync, including when the lightbox is reopened.
+
 function syncCardMedia(productId, mediaId, path) {
     const card = document.querySelector('.product-card[data-id="' + productId + '"]');
     if (!card) return;
@@ -1097,18 +1018,17 @@ function syncCardMedia(productId, mediaId, path) {
 }
 
 window.deleteImage = function() {
-    if (enhancementState) return;
     if (!confirm('هل تريد حذف هذه الصورة؟')) return;
     const mediaId = lbState.mediaIds[lbState.idx];
     if (!mediaId) { alert('معرف الصورة غير متوفر'); return; }
-    
+
     const fd = new FormData();
     fd.append('csrf', csrfToken);
     fd.append('op', 'delete');
     fd.append('media_id', mediaId);
     const productId = lbState.productId;
     fd.append('product_id', productId);
-    
+
     fetch('?action=media_action', { method:'POST', body: fd })
     .then(r => r.json())
     .then(data => {
@@ -1130,7 +1050,6 @@ window.deleteImage = function() {
 };
 
 window.mediaAction = function(op, mediaId, productId, file) {
-    if (enhancementState) return;
     if (!file) return;
     if (op === 'replace' && !mediaId) { showToast('معرف الصورة غير متوفر', 'error'); return; }
     const fd = new FormData();
@@ -1140,9 +1059,9 @@ window.mediaAction = function(op, mediaId, productId, file) {
     if (mediaId) fd.append('media_id', mediaId);
     fd.append('file', file);
     fd.append('kind', 'photo');
-    
+
     showToast(op === 'add' ? 'جاري الإضافة...' : 'جاري الاستبدال...');
-    
+
     fetch('?action=media_action', { method:'POST', body: fd })
     .then(r => r.json())
     .then(data => {
@@ -1165,134 +1084,6 @@ window.mediaAction = function(op, mediaId, productId, file) {
     .catch(() => showToast('خطأ في الاتصال', 'error'));
 };
 
-function enhancementRequest(action, fields) {
-    const body = new FormData();
-    body.append('csrf', csrfToken);
-    Object.entries(fields).forEach(([key, value]) => body.append(key, value));
-    return fetch('?action=enhancement_' + action, {method: 'POST', body})
-        .then(response => response.json())
-        .then(data => { if (!data.ok) throw new Error(data.error || 'تعذر تحسين الصورة'); return data; });
-}
-
-function enhancementMode(active) {
-    document.getElementById('lbImg').style.display = active ? 'none' : '';
-    document.getElementById('lbActions').style.display = active ? 'none' : '';
-    document.querySelectorAll('#lightbox > .lightbox-nav').forEach(button => { button.style.display = active ? 'none' : ''; });
-    document.getElementById('lbEnhancement').hidden = !active;
-}
-
-window.cancelEnhancement = function() {
-    const state = enhancementState;
-    if (!state || state.saving) return;
-    enhancementState = null;
-    enhancementMode(false);
-    document.getElementById('lbEnhancement').replaceChildren();
-    if (state.token) enhancementRequest('cancel', {token: state.token}).catch(() => {});
-    document.querySelector('.lb-enhance')?.focus();
-};
-
-window.enhanceImage = function() {
-    if (enhancementState) return;
-    const mediaId = lbState.mediaIds[lbState.idx];
-    if (!mediaId) { showToast('معرف الصورة غير متوفر', 'error'); return; }
-    const profile = document.getElementById('lbEnhanceProfile')?.value || 'whiteware';
-    const state = {productId: lbState.productId, mediaId, profile, token: null, ready: false, saving: false};
-    enhancementState = state;
-    enhancementMode(true);
-    const panel = document.getElementById('lbEnhancement');
-    panel.innerHTML = '<h2>تحسين الصورة</h2><p role="status">' + (profile === 'ai4' ? 'جاري تشغيل EDSR ×4 لإنشاء نسخة High Resolution. قد يستغرق عدة دقائق على المعالج؛ لا تغلق الصفحة.' : 'جاري تجهيز نسخة محسّنة للمقارنة…') + ' الصورة الأصلية لن تتغير قبل موافقتك.</p><button class="lightbox-action-btn" onclick="cancelEnhancement()">إلغاء والاحتفاظ بالأصل</button>';
-    enhancementRequest('create', {product_id: state.productId, media_id: state.mediaId, profile: state.profile})
-    .then(data => {
-        if (enhancementState !== state) {
-            enhancementRequest('cancel', {token: data.token}).catch(() => {});
-            return;
-        }
-        state.token = data.token;
-        panel.innerHTML = `
-            <h2>هل الصورة المحسّنة أفضل؟</h2>
-            <p id="enhancementDescription"></p>
-            <div class="enhancement-inspect"><label><input id="enhanceActualSize" type="checkbox" onchange="toggleEnhancementDetail(this.checked)"> فحص التفاصيل بالحجم الفعلي (100٪) — اسحب لرؤية باقي الصورة</label></div>
-            <div class="enhancement-compare">
-                <figure><figcaption>قبل — الصورة الأصلية</figcaption><div class="enhancement-viewport"><img id="enhanceBefore" alt="الصورة الأصلية قبل التحسين"></div></figure>
-                <figure><figcaption>بعد — الصورة المحسّنة</figcaption><div class="enhancement-viewport"><img id="enhanceAfter" alt="معاينة الصورة المحسّنة"></div></figure>
-            </div>
-            <p id="enhancementStatus" role="status">جاري تحميل المعاينة…</p>
-            <div class="enhancement-decisions">
-                <a id="enhanceDownload" class="lightbox-action-btn" hidden>تنزيل PNG كامل الدقة — بدون استبدال الأصل</a>
-                <button id="enhanceApprove" class="lightbox-action-btn lb-enhance" disabled onclick="approveImageEnhancement()">✓ اعتماد التحسين واستبدال الصورة</button>
-                <button id="enhanceCancel" class="lightbox-action-btn" onclick="cancelEnhancement()">إلغاء والاحتفاظ بالأصل</button>
-            </div>`;
-        const description = document.getElementById('enhancementDescription');
-        const dimensions = `الأصل ${data.source_width}×${data.source_height} · النتيجة ${data.width}×${data.height}`;
-        description.textContent = data.profile === 'ai4'
-            ? `EDSR ×4 — High Resolution: 16 ضعف عدد البكسلات، وPNG بدون فقد بسبب الضغط. ${dimensions}. راجع التفاصيل قبل الاعتماد؛ النموذج يقدّر التفاصيل ولا يضمن استرجاع الأصل المفقود.`
-            : data.profile === 'ai'
-            ? `نموذج FSRCNN العصبي ×2 مع معالجة للمنتجات البيضاء. ${dimensions}. راجع الحواف والتفاصيل؛ التكبير ليس ضمانًا لاسترجاع المفقود.`
-            : `تباين موضعي وإبراز الحواف والظلال مع حماية اللون الأبيض. ${dimensions}. معالجة محلية وليست AI؛ الأبعاد لم تتغير.`;
-        let loaded = 0;
-        ['enhanceBefore', 'enhanceAfter'].forEach((id, index) => {
-            const image = document.getElementById(id);
-            image.onload = () => {
-                if (enhancementState !== state) return;
-                loaded++;
-                if (loaded === 2) {
-                    state.ready = true;
-                    const download = document.getElementById('enhanceDownload');
-                    download.href = data.download_url;
-                    download.hidden = false;
-                    document.getElementById('enhanceApprove').disabled = false;
-                    document.getElementById('enhancementStatus').textContent = 'الأصل محفوظ حتى تختار اعتماد التحسين. المعاينة صالحة لمدة 10 دقائق.';
-                }
-            };
-            image.onerror = () => {
-                if (enhancementState !== state) return;
-                state.ready = false;
-                document.getElementById('enhanceApprove').disabled = true;
-                document.getElementById('enhancementStatus').textContent = 'تعذر تحميل المعاينة. ألغِ وحاول مرة أخرى؛ الصورة الأصلية لم تتغير.';
-            };
-            image.src = index === 0 ? data.original_url : data.preview_url;
-        });
-        document.getElementById('enhanceCancel').focus();
-    })
-    .catch(error => {
-        if (enhancementState !== state) return;
-        cancelEnhancement();
-        showToast(error.message || 'خطأ في الاتصال', 'error');
-    });
-};
-
-window.toggleEnhancementDetail = function(actual) {
-    document.querySelector('.enhancement-compare')?.classList.toggle('actual-size', actual);
-};
-
-window.approveImageEnhancement = function() {
-    const state = enhancementState;
-    if (!state?.token || !state.ready || state.saving) return;
-    state.saving = true;
-    document.getElementById('enhanceApprove').disabled = true;
-    document.getElementById('enhanceCancel').disabled = true;
-    document.getElementById('enhancementStatus').textContent = 'جاري اعتماد التحسين…';
-    enhancementRequest('approve', {token: state.token})
-    .then(data => {
-        const path = data.path + '?t=' + Date.now();
-        syncCardMedia(state.productId, state.mediaId, path);
-        const idx = lbState.mediaIds.indexOf(state.mediaId);
-        if (lbState.productId === state.productId && idx !== -1) lbState.images[idx] = path;
-        enhancementState = null;
-        enhancementMode(false);
-        document.getElementById('lbEnhancement').replaceChildren();
-        updateLightbox();
-        document.querySelector('.lb-enhance')?.focus();
-        showToast('تم اعتماد التحسين واستبدال الصورة', 'success');
-    })
-    .catch(error => {
-        state.saving = false;
-        document.getElementById('enhanceApprove').disabled = false;
-        document.getElementById('enhanceCancel').disabled = false;
-        document.getElementById('enhancementStatus').textContent = error.message || 'تعذر الحفظ. حاول مرة أخرى أو احتفظ بالأصل.';
-    });
-};
-
 function showToast(msg, type='success') {
     const t = document.getElementById('toast');
     t.textContent = msg;
@@ -1312,36 +1103,36 @@ document.getElementById('lightbox').addEventListener('click', function(e) {
     if (e.target === this) closeLightbox();
 });
 
-// Handle lightbox triggers
+
 document.addEventListener('click', function(e) {
     const trigger = e.target.closest('.lightbox-trigger');
     if (!trigger) return;
-    
+
     const card = trigger.closest('.product-card');
     const productId = parseInt(trigger.dataset.product);
     const idx = parseInt(trigger.dataset.idx);
-    
-    // Get all images from this card
+
+
     const triggers = Array.from(card.querySelectorAll('.lightbox-trigger'));
     const images = triggers.map(img => img.src);
     const mediaIds = triggers.map(img => Number(img.dataset.mediaId));
     const total = images.length;
-    
+
     if (total > 0) {
         openLightbox(idx, total, productId, images, mediaIds);
     }
 });
 
-// ═══ VERIFY SYSTEM ═══
+
 let selectedForVerify = new Set();
 
 window.toggleVerify = function(el, productId) {
     const card = el.closest('.product-card');
-    
+
     const fd = new FormData();
     fd.append('csrf', csrfToken);
     fd.append('id', productId);
-    
+
     fetch('?action=toggle_verify', { method:'POST', body: fd })
     .then(r => r.json())
     .then(data => {
@@ -1365,19 +1156,19 @@ window.toggleVerify = function(el, productId) {
 
 window.bulkVerifySelected = function() {
     if (selectedForVerify.size === 0) return;
-    
+
     const fd = new FormData();
     fd.append('csrf', csrfToken);
     const submittedIds = Array.from(selectedForVerify);
     fd.append('ids', JSON.stringify(submittedIds));
-    
+
     showToast('جاري تأكيد ' + selectedForVerify.size + ' منتج...');
-    
+
     fetch('?action=bulk_verify', { method:'POST', body: fd })
     .then(r => r.json())
     .then(data => {
         if (data.ok) {
-            // Update UI
+
             submittedIds.forEach(id => {
                 const card = document.querySelector('.product-card[data-id="'+id+'"]');
                 if (card) {
@@ -1422,14 +1213,14 @@ function updateBulkBar() {
     }
 }
 
-// Allow clicking on card body to toggle selection (not on interactive elements)
+
 document.addEventListener('click', function(e) {
-    // Don't trigger if clicking on interactive elements
+
     if (e.target.closest('.inline-field, .inline-edit-form, .carousel-btn, .upload-btn, .card-btn, .lightbox-trigger, .verify-check')) return;
-    
+
     const card = e.target.closest('.product-card');
     if (!card) return;
-    
+
     const id = parseInt(card.dataset.id);
     if (selectedForVerify.has(id)) {
         selectedForVerify.delete(id);
@@ -1447,35 +1238,35 @@ document.addEventListener('click', function(e) {
     <?php
 }
 
-// ═══════════════════════════════════════════════════════════
+
 function productCardHTML(array $p): string {
     $d = db();
     $media = mediaFor($d, $p['id']);
     $previewable = array_values(array_filter($media, fn($m) => (int)$m['previewable']));
-    
-    // Build carousel
+
+
     $carouselImgs = '';
     $carouselDots = '';
     foreach ($previewable as $i => $m) {
         $carouselImgs .= '<img src="'.h($m['path']).'" data-idx="'.$i.'" data-media-id="'.(int)$m['id'].'" data-product="'.$p['id'].'" class="lightbox-trigger">';
         $carouselDots .= '<span class="carousel-dot'.($i===0?' active':'').'"></span>';
     }
-    
+
     $statusClass = str_replace(' ', '-', $p['status']);
     $statusText = ['Running'=>'نشط','New Model'=>'موديل جديد','Slow Moving'=>'بطيء','Aging'=>'قديم'][$p['status']] ?? $p['status'];
     $isVerified = (int)($p['verified'] ?? 0) === 1;
     $verifiedClass = $isVerified ? ' verified' : '';
-    
+
     $carouselBtns = count($previewable) > 1 ? '
         <button class="carousel-btn carousel-prev" onclick="event.stopPropagation();carouselPrev(this)"><i class="fas fa-chevron-right"></i></button>
         <button class="carousel-btn carousel-next" onclick="event.stopPropagation();carouselNext(this)"><i class="fas fa-chevron-left"></i></button>
         <div class="carousel-dots">'.$carouselDots.'</div>
     ' : '';
-    
+
     $noImage = empty($previewable) ? '<div class="no-image"><i class="far fa-image"></i></div>' : '';
-    
+
     $verifiedIcon = $isVerified ? '<i class="fas fa-check-circle verified-icon"></i>' : '<i class="far fa-circle verify-icon"></i>';
-    
+
     return '<div class="product-card'.$verifiedClass.'" data-id="'.$p['id'].'" data-version="'.$p['version'].'" data-verified="'.($isVerified?'1':'0').'">'
         .'<div class="card-carousel">'
         .'<div class="card-carousel-imgs">'.$carouselImgs.$noImage.'</div>'
@@ -1520,7 +1311,7 @@ function renderProducts(array $products, int $page, int $totalPages, string $bas
     echo '<div class="products-grid">';
     foreach ($products as $p) echo productCardHTML($p);
     echo '</div>';
-    
+
     if ($totalPages > 1) {
         echo '<div class="pagination">';
         if ($page > 1) echo '<a href="'.$baseUrl.'&page='.($page-1).'"><i class="fas fa-arrow-right"></i> السابق</a>';
@@ -1534,7 +1325,7 @@ function renderProducts(array $products, int $page, int $totalPages, string $bas
     }
 }
 
-// Carousel navigation
+
 ?>
 <script>
 function carouselPrev(btn) {
@@ -1587,7 +1378,7 @@ function deleteProduct(id) {
 </script>
 <?php
 
-// ── HOME ──────────────────────────────────────────────────
+
 function showHome(int $page): void {
     $d = db();
     $allProducts = allProducts($d, false);
@@ -1597,25 +1388,25 @@ function showHome(int $page): void {
         $groups[$key] = ($groups[$key] ?? 0) + 1;
     }
     arsort($groups);
-    
+
     $filtered = array_values($allProducts);
-    
+
     $perPage = 12;
     $total = count($filtered);
     $totalPages = max(1, (int)ceil($total / $perPage));
     $page = max(1, min($page, $totalPages));
     $paged = array_slice($filtered, ($page-1)*$perPage, $perPage);
-    
+
     ob_start();
     ?>
     <div class="toolbar">
         <div class="toolbar-title">تصفح كل المنتجات</div>
         <div class="toolbar-count"><?= $total ?> منتج</div>
     </div>
-    
+
     <?php renderProducts($paged, $page, $totalPages, '?action=home'); ?>
     <?php
-    
+
     layout('الرئيسية', ob_get_clean(), $groups, '', 'home');
 }
 
@@ -1653,33 +1444,33 @@ function showArchive(int $page): void {
     layout('الأرشيف', ob_get_clean(), getGroups($d), '', 'archive_list');
 }
 
-// ─── GROUP VIEW ────────────────────────────────────────────
+
 function showGroup(string $prefix, int $page): void {
     $d = db();
     $allProducts = allProducts($d, false);
     $filtered = array_values(array_filter($allProducts, fn($p) => $p['group'] === $prefix));
-    
+
     $perPage = 12;
     $total = count($filtered);
     $totalPages = max(1, (int)ceil($total / $perPage));
     $page = max(1, min($page, $totalPages));
     $paged = array_slice($filtered, ($page-1)*$perPage, $perPage);
-    
+
     ob_start();
     ?>
     <div class="toolbar">
         <div class="toolbar-title">مجموعة الكود: <?= h($prefix) ?></div>
         <div class="toolbar-count"><?= $total ?> منتج</div>
     </div>
-    
+
     <?php renderProducts($paged, $page, $totalPages, '?action=group&prefix='.urlencode((string)$prefix)); ?>
     <?php
-    
+
     $groups = getGroups($d);
     layout('مجموعة '.$prefix, ob_get_clean(), $groups, '', 'group');
 }
 
-// ─── SEARCH ────────────────────────────────────────────────
+
 function showSearch(string $q, int $page): void {
     $d = db();
     $q = trim($q);
@@ -1687,13 +1478,13 @@ function showSearch(string $q, int $page): void {
     $filtered = $q === '' ? $allProducts : array_values(array_filter($allProducts, function($p) use ($q) {
         return stripos($p['code'],$q)!==false || stripos($p['description'],$q)!==false || stripos($p['brand'],$q)!==false;
     }));
-    
+
     $perPage = 12;
     $total = count($filtered);
     $totalPages = max(1, (int)ceil($total / $perPage));
     $page = max(1, min($page, $totalPages));
     $paged = array_slice($filtered, ($page-1)*$perPage, $perPage);
-    
+
     ob_start();
     ?>
     <div class="toolbar">
@@ -1702,12 +1493,12 @@ function showSearch(string $q, int $page): void {
     </div>
     <?php renderProducts($paged, $page, $totalPages, '?action=search&q='.urlencode((string)$q)); ?>
     <?php
-    
+
     $groups = getGroups($d);
     layout('بحث: '.$q, ob_get_clean(), $groups, '', 'search');
 }
 
-// ─── ERROR PAGES ───────────────────────────────────────────
+
 function showError(string $message): void {
     ob_start();
     ?><div class="error-box"><h3><i class="fas fa-exclamation-circle"></i> حدث خطأ</h3><p><?= h($message) ?></p><a href="?action=home" class="btn btn-outline" style="margin-top:16px;">العودة للرئيسية</a></div><?php
@@ -1736,7 +1527,6 @@ function showSetupError(string $message): void {
             </ol>
         </div>
         <div style="margin-top:20px;">
-            <?php if (!$fileMode): ?><a href="setup.php" class="btn btn-primary" style="margin:4px;"><i class="fas fa-stethoscope"></i> فحص النظام</a><?php endif; ?>
             <a href="?action=home" class="btn btn-outline" style="margin:4px;"><i class="fas fa-sync"></i> تحديث</a>
         </div>
     </div>

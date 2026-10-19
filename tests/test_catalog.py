@@ -1,4 +1,3 @@
-"""Validate the committed catalog snapshot without third-party packages."""
 import collections
 import json
 import unittest

@@ -20,7 +20,7 @@ if (is_file(__DIR__ . '/config.local.php'))
 
 require_once __DIR__ . '/includes/catalog_storage.php';
 $config['driver'] = catalogDriver($config, $_SERVER, PHP_SAPI);
-// Hosted/database mode deliberately fails on connection errors; no silent data-store switch.
+
 const STATUSES = ['Running', 'New Model', 'Slow Moving', 'Aging'];
 function h($s): string
 {
@@ -116,7 +116,7 @@ function install(): void
         foreach (explode(';', $sql) as $part)
             if (trim($part) !== '' && !preg_match('/^\s*(CREATE DATABASE|USE )/i', $part))
                 $db->exec($part);
-        // Ensure verified column exists (for existing databases)
+
         try {
             $db->exec('ALTER TABLE products ADD COLUMN verified INT NOT NULL DEFAULT 0');
         } catch (Throwable $e) {
@@ -126,7 +126,7 @@ function install(): void
         } catch (Throwable $e) {
         }
     } else {
-        // Ensure SQLite directory exists
+
         $sqliteDir = dirname($config['sqlite_path']);
         if (!is_dir($sqliteDir))
             mkdir($sqliteDir, 0755, true);
@@ -283,7 +283,7 @@ function mediaLabel(string $kind): string
     return ['photo' => 'صورة المنتج', 'drawing' => 'رسم فني', 'extra' => 'صورة إضافية'][$kind] ?? 'مرفق';
 }
 
-// Safely delete catalog/upload files only after their last database reference is gone.
+
 function deleteMediaFile(PDO|JsonCatalogStore $db, string $path): void
 {
     $normalizedPath = ltrim(str_replace('\\', '/', $path), '/');

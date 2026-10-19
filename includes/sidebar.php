@@ -58,8 +58,8 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
     $activePrefix = (string)$activePrefix;
     $categories = getGroupCategories($groups);
     $totalProducts = array_sum($groups);
-    
-    // Get first image for each group
+
+
     $d = db();
     $firstImages = [];
     $covers = [];
@@ -74,9 +74,9 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
     $html .= '<div class="sidebar-title"><i class="fas fa-folder-open"></i> استكشف المنتجات</div>';
     $html .= '<div class="sidebar-total">' . $totalProducts . ' منتج في ' . count($groups) . ' مجموعة</div>';
     $html .= '</div>';
-    
+
     $html .= '<div class="sidebar-search-wrap"><input type="text" class="sidebar-search" placeholder="ابحث في المجموعات..." id="sidebarSearch"></div>';
-    
+
     $html .= '<div class="sidebar-categories">';
     foreach ($categories as $catName => $catGroups) {
         $catId = 'cat-' . preg_replace('/[^a-z]/', '', strtolower($catName));
@@ -104,7 +104,7 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
         $html .= '</div></div>';
     }
     $html .= '</div>';
-    
+
     $html .= '<div class="sidebar-footer">';
     $html .= '<a href="?action=home" class="sidebar-all-btn"><i class="fas fa-home"></i> عرض كل المنتجات</a>';
     $html .= '</div>';
@@ -115,7 +115,7 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
 function sidebarAssets(): void {
 ?>
 <style>
-/* ══ Sidebar ══ */
+
 .sidebar {
     width: 320px;
     flex-shrink: 0;
@@ -221,7 +221,7 @@ function sidebarAssets(): void {
 .group-icon { font-size: 1rem; width: 20px; text-align: center; color: var(--text-muted); }
 .sidebar-group.active .group-icon { color: white; }
 
-/* Thumbnail image in sidebar */
+
 .sidebar-thumb {
     width: 36px;
     height: 36px;
@@ -270,7 +270,7 @@ function sidebarAssets(): void {
 </style>
 
 <script>
-// Sidebar category toggle
+
 document.querySelectorAll('.sidebar-cat-btn').forEach(btn => {
     btn.addEventListener('click', function() {
         const target = this.getAttribute('data-target');
@@ -281,7 +281,7 @@ document.querySelectorAll('.sidebar-cat-btn').forEach(btn => {
     });
 });
 
-// Sidebar search filter
+
 const sidebarSearch = document.getElementById('sidebarSearch');
 if (sidebarSearch) {
     sidebarSearch.addEventListener('input', function(e) {

@@ -1,10 +1,9 @@
-// Run with: node --test tests/test_media.cjs (no dependencies required).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../index.php'), 'utf8');
-const script = source.split('// ═══ LIGHTBOX ═══')[1].split('// ═══ VERIFY SYSTEM ═══')[0];
+const script = source.slice(source.indexOf('const lbState ='), source.indexOf('let selectedForVerify ='));
 
 function setup(ids = [41, 42]) {
     const listeners = {};

@@ -2,20 +2,20 @@
 declare(strict_types=1);
 require __DIR__.'/app.php';
 
-// If already logged in, redirect to main page
+
 if (!empty($_SESSION['lufly_auth']) && $_SESSION['lufly_auth'] === true) {
     header('Location: index.php');
     exit;
 }
 
-// Load config to get password
+
 $appPassword = $config['app_password'] ?? '';
 
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $input = (string)($_POST['password'] ?? '');
-    
+
     if ($appPassword === '' || $input === '') {
         $error = 'الرجاء إدخال كلمة المرور';
     } elseif (hash_equals($appPassword, $input)) {
@@ -135,13 +135,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
         <h1 class="login-title">LUFLY Catalog</h1>
         <p class="login-subtitle">سجل الدخول للوصول إلى النظام</p>
-        
+
         <?php if ($error): ?>
             <div class="error-message">
                 <?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?>
             </div>
         <?php endif; ?>
-        
+
         <form method="POST" action="">
             <div class="input-group">
                 <label for="password">كلمة المرور</label>
@@ -149,7 +149,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
             <button type="submit" class="login-btn">تسجيل الدخول</button>
         </form>
-        
+
         <p class="footer-text">نظام إدارة كتالوج LUFLY</p>
     </div>
 </body>

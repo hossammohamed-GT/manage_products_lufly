@@ -1,25 +1,16 @@
-# Environment file (contains credentials - NEVER commit)
 .env
 !/.env.example
 /config.local.php
 
-# Uploads
 /uploads/*
-!/uploads/.htaccess
 !/uploads/.gitkeep
 
-# Data
 /data/*.lock
 /data/*.sqlite*
 /data/local/
 
-# Google Drive
 /google_drive/
 
-# Python
 __pycache__/
 *.py[cod]
 .venv/
-
-# Optional high-resolution model is installed separately, not committed.
-/tools/image_enhancement/models/EDSR_x4.pb

@@ -1,7 +1,3 @@
-"""One-time build: python tools/import_excel.py google_drive (requires Pillow).
-Reads every drawing anchor, including unlabeled columns. Never deduplicates product rows.
-Browser assets use high-quality WebP; original non-raster files are preserved for download.
-"""
 import sys, json, zipfile, posixpath, hashlib, io, collections
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -21,7 +17,7 @@ def asset(z,path):
  try:
   im=Image.open(io.BytesIO(raw)); im=ImageOps.exif_transpose(im)
   if im.mode not in ('RGB','RGBA'):im=im.convert('RGBA' if 'transparency' in im.info else 'RGB')
-  # No resizing: preserve full pixel dimensions, optimize download/storage size.
+
   out=io.BytesIO(); im.save(out,'WEBP',quality=94,method=6); payload=out.getvalue(); ext='.webp';converted=True
  except (OSError,ValueError):payload=raw
  target='assets/catalog/'+digest[:24]+ext

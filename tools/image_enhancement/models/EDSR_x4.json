@@ -1,9 +1,0 @@
-{
-  "name": "EDSR ×4",
-  "file": "EDSR_x4.pb",
-  "bytes": 38573255,
-  "sha256": "dd35ce3cae53ecee2d16045e08a932c3e7242d641bb65cb971d123e06904347f",
-  "url": "https://github.com/Saafke/EDSR_Tensorflow/raw/06c7bd65b0305c2955328f8f2721ea86c341f660/models/EDSR_x4.pb",
-  "source": "https://github.com/Saafke/EDSR_Tensorflow/tree/06c7bd65b0305c2955328f8f2721ea86c341f660",
-  "license": "Apache-2.0"
-}
