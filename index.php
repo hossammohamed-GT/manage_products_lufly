@@ -1,9 +1,9 @@
 <?php
 declare(strict_types=1);
 require __DIR__.'/app.php';
+require_once __DIR__.'/includes/sidebar.php';
 
 // Authentication check
-$config = require __DIR__.'/config.php';
 $appPassword = $config['app_password'] ?? '';
 
 if ($appPassword !== '') {
@@ -44,7 +44,8 @@ try {
             $d = db();
             $id = (int)($_POST['id'] ?? 0);
             if (!$id) throw new RuntimeException('معرف المنتج مطلوب');
-            $current = (int)run($d, 'SELECT verified FROM products WHERE id=?', [$id])->fetchColumn();
+            $product = requireProduct($d, $id);
+            $current = (int)$product['verified'];
             $newVal = $current ? 0 : 1;
             run($d, 'UPDATE products SET verified=?, version=version+1, updated_at=? WHERE id=?', [$newVal, date('c'), $id]);
             echo json_encode(['ok'=>true, 'verified'=>$newVal]);
@@ -60,10 +61,15 @@ try {
             checkCsrf();
             $d = db();
             $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
-            if (!is_array($ids) || empty($ids)) throw new RuntimeException('لم يتم تحديد منتجات');
+            if (!is_array($ids) || empty($ids) || count($ids) > 1000) throw new RuntimeException('حدد من 1 إلى 1000 منتج');
+            foreach ($ids as $id) {
+                if (!is_int($id) || $id <= 0) throw new RuntimeException('معرف المنتج غير صالح');
+            }
+            $ids = array_values(array_unique($ids));
+            foreach ($ids as $id) requireProduct($d, $id);
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
-            run($d, "UPDATE products SET verified=1, version=version+1, updated_at=? WHERE id IN ($placeholders)", array_merge([date('c')], $ids));
-            echo json_encode(['ok'=>true, 'count'=>count($ids)]);
+            $updated = run($d, "UPDATE products SET verified=1, version=version+1, updated_at=? WHERE archived=0 AND id IN ($placeholders)", array_merge([date('c')], $ids));
+            echo json_encode(['ok'=>true, 'count'=>$updated->rowCount()]);
         } catch (Throwable $e) {
             http_response_code(400);
             echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
@@ -117,64 +123,38 @@ try {
                 $allowed = ['code','brand','description','notes','status'];
                 if (!in_array($field, $allowed)) throw new RuntimeException('حقل غير صالح');
                 if ($field === 'status' && !in_array($value, STATUSES, true)) throw new RuntimeException('حالة غير صالحة');
-                if (strlen($value) > 60000) throw new RuntimeException('النص طويل جداً');
+                if (strlen($value) > (in_array($field, ['code', 'brand'], true) ? 190 : 60000)) throw new RuntimeException('النص طويل جداً');
                 $now = date('c');
                 $s = run($d, "UPDATE products SET $field=?, version=version+1, updated_at=? WHERE id=? AND archived=0", [$value, $now, $id]);
                 if ($s->rowCount() !== 1) throw new RuntimeException('المنتج غير موجود');
                 echo json_encode(['ok'=>true, 'field'=>$field, 'value'=>$value]);
             }
             else if ($action === 'media_action') {
-                $mediaId = (int)($_POST['media_id'] ?? 0);
-                $productId = (int)($_POST['product_id'] ?? 0);
-                $op = (string)($_POST['op'] ?? '');
-                
-                if (!in_array($op, ['replace','delete','add'])) throw new RuntimeException('عملية غير صالحة');
-                if ($op !== 'add' && !$mediaId) throw new RuntimeException('معرف الصورة مطلوب');
-                
-                if ($op === 'delete') {
-                    $m = run($d, 'SELECT * FROM media WHERE id=? AND product_id=?', [$mediaId, $productId])->fetch();
-                    if (!$m) throw new RuntimeException('الصورة غير موجودة');
-                    deleteMediaFile($d, $m['path']);
-                    run($d, 'DELETE FROM media WHERE id=?', [$mediaId]);
-                    echo json_encode(['ok'=>true, 'op'=>'delete', 'media_id'=>$mediaId]);
-                } else {
-                    $kind = (string)($_POST['kind'] ?? 'photo');
-                    if (!in_array($kind, ['photo','drawing','extra'])) throw new RuntimeException('نوع غير صالح');
-                    
-                    if (empty($_FILES['file']) || ($_FILES['file']['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
-                        throw new RuntimeException('لم يتم رفع ملف');
-                    }
-                    $f = $_FILES['file'];
-                    if ($f['error'] !== UPLOAD_ERR_OK) throw new RuntimeException('خطأ في الرفع');
-                    if ((int)$f['size'] > 12*1024*1024) throw new RuntimeException('الحجم أكبر من 12MB');
-                    
-                    $mime = (new finfo(FILEINFO_MIME_TYPE))->file($f['tmp_name']);
-                    $allowedMime = ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp','image/gif'=>'gif'];
-                    if (!isset($allowedMime[$mime]) || @getimagesize($f['tmp_name'])===false) throw new RuntimeException('JPG/PNG/WebP/GIF فقط');
-                    
-                    $ext = $allowedMime[$mime];
-                    $newPath = 'uploads/'.bin2hex(random_bytes(18)).'.'.$ext;
-                    if (!is_dir(__DIR__.'/uploads')) mkdir(__DIR__.'/uploads', 0755, true);
-                    if (!move_uploaded_file($f['tmp_name'], __DIR__.'/'.ltrim($newPath,'/'))) throw new RuntimeException('تعذر حفظ الصورة');
-                    
-                    $sha = hash_file('sha256', __DIR__.'/'.ltrim($newPath,'/'));
-                    $origName = substr(basename(str_replace('\\','/',$f['name'])),0,240);
-                    
-            if ($op === 'replace') {
-                $m = run($d, 'SELECT * FROM media WHERE id=? AND product_id=?', [$mediaId, $productId])->fetch();
-                if (!$m) { @unlink(__DIR__.'/'.ltrim($newPath,'/')); throw new RuntimeException('الصورة غير موجودة'); }
-                deleteMediaFile($d, $m['path']);
-                run($d, 'UPDATE media SET path=?, sha256=?, kind=?, original_name=? WHERE id=?', [$newPath, $sha, $kind, $origName, $mediaId]);
-                echo json_encode(['ok'=>true, 'op'=>'replace', 'media_id'=>$mediaId, 'path'=>$newPath]);
-                    } else {
-                        $maxSort = (int)$d->query('SELECT MAX(sort_order) FROM media WHERE product_id='.$productId)->fetchColumn();
-                        run($d, 'INSERT INTO media (product_id,path,original_name,kind,caption,sort_order,previewable,sha256) VALUES (?,?,?,?,?,?,1,?)',
-                            [$productId, $newPath, $origName, $kind, '', $maxSort+1, $sha]);
-                        $newId = (int)$d->lastInsertId();
-                        echo json_encode(['ok'=>true, 'op'=>'add', 'media_id'=>$newId, 'path'=>$newPath]);
-                    }
-                }
+                echo json_encode(changeMedia($d, (string)($_POST['op'] ?? ''),
+                    (int)($_POST['product_id'] ?? 0), (int)($_POST['media_id'] ?? 0),
+                    (string)($_POST['kind'] ?? 'photo')));
             }
+        } catch (Throwable $e) {
+            http_response_code(400);
+            echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
+        }
+        exit;
+    }
+
+    if (in_array($action, ['archive', 'restore', 'delete'], true) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        header('Content-Type: application/json; charset=utf-8');
+        try {
+            checkCsrf();
+            $d = db();
+            $id = (int)($_POST['id'] ?? 0);
+            requireProduct($d, $id, false);
+            if ($action === 'delete') {
+                deleteProductRecord($d, $id);
+            } else {
+                run($d, 'UPDATE products SET archived=?,version=version+1,updated_at=? WHERE id=?',
+                    [$action === 'archive' ? 1 : 0, date('c'), $id]);
+            }
+            echo json_encode(['ok'=>true]);
         } catch (Throwable $e) {
             http_response_code(400);
             echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
@@ -186,43 +166,32 @@ try {
         case 'home': showHome($page); break;
         case 'group': showGroup($_GET['prefix'] ?? '', $page); break;
         case 'search': showSearch($_GET['q'] ?? '', $page); break;
-        case 'archive':
-            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-                checkCsrf();
-                $id = (int)($_POST['id'] ?? 0);
-                if ($id) { run(db(), 'UPDATE products SET archived=1 WHERE id=?', [$id]); flash('تم أرشفة المنتج'); }
-                go('?action=home');
-            }
-            break;
-        case 'restore':
-            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-                checkCsrf();
-                $id = (int)($_POST['id'] ?? 0);
-                if ($id) { run(db(), 'UPDATE products SET archived=0 WHERE id=?', [$id]); flash('تم الاستعادة'); }
-                go('?action=home');
-            }
-            break;
-        case 'delete':
-            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-                checkCsrf();
-                $d = db();
-                $id = (int)($_POST['id'] ?? 0);
-                if ($id) {
-                    $media = mediaFor($d, $id);
-                    foreach ($media as $m) deleteMediaFile($d, $m['path']);
-                    run($d, 'DELETE FROM products WHERE id=?', [$id]);
-                    flash('تم الحذف نهائياً');
-                }
-                go('?action=home');
-            }
-            break;
-        case 'settings':
+        case 'archive_list': showArchive($page); break;
+        case 'setup_error': showSetupError($setupError ?? 'تعذر إعداد قاعدة البيانات'); break;
+        case 'settings': showSettings(); break;
         case 'save_settings':
-        case 'archive_list':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') { http_response_code(405); showError('استخدم نموذج الإعدادات للحفظ'); break; }
+            checkCsrf();
+            $title = trim((string)($_POST['site_title'] ?? ''));
+            $primary = (string)($_POST['primary_color'] ?? '');
+            $secondary = (string)($_POST['secondary_color'] ?? '');
+            if ($title === '' || strlen($title) > 190 || !preg_match('/^#[a-fA-F0-9]{6}$/', $primary) || !preg_match('/^#[a-fA-F0-9]{6}$/', $secondary))
+                throw new RuntimeException('اكتب عنوانًا صحيحًا واختر ألوانًا صحيحة');
+            $d = db();
+            $d->beginTransaction();
+            try {
+                foreach (['site_title'=>$title, 'primary_color'=>$primary, 'secondary_color'=>$secondary] as $key=>$value) setSetting($d, $key, $value);
+                $d->commit();
+            } catch (Throwable $e) {
+                if ($d->inTransaction()) $d->rollBack();
+                throw $e;
+            }
+            flash('تم حفظ الإعدادات');
+            go('?action=settings');
+            break;
         case 'reinstall':
-        case 'setup_error':
-            // These will show as modals or be handled in the main view
-            showHome($page);
+            http_response_code(400);
+            showError('إعادة التثبيت معطّلة لحماية بياناتك من الحذف.');
             break;
         default: showHome(1);
     }
@@ -233,20 +202,23 @@ try {
 // ═══════════════════════════════════════════════════════════
 function layout(string $title, string $content, array $groups = [], string $extraJs = '', string $action = 'home'): void
 {
-    require_once __DIR__.'/includes/sidebar.php';
-    $d = db();
-    $siteTitle = setting($d, 'site_title', 'LUFLY Catalog');
-    $primary = setting($d, 'primary_color', '#1F9E9E');
-    $secondary = setting($d, 'secondary_color', '#147070');
+    global $config;
+    // Error/setup pages must render even when the database is unavailable.
+    $d = null;
+    try { $d = db(); } catch (Throwable $e) { }
+    $siteTitle = $d ? setting($d, 'site_title', 'LUFLY Catalog') : 'LUFLY Catalog';
+    $primary = $d ? setting($d, 'primary_color', '#1F9E9E') : '#1F9E9E';
+    $secondary = $d ? setting($d, 'secondary_color', '#147070') : '#147070';
     $flash = $_SESSION['flash'] ?? '';
     unset($_SESSION['flash']);
-    $sidebarHtml = renderSidebar($groups, (string)($_GET['prefix'] ?? ''));
+    $sidebarHtml = $d ? renderSidebar($groups, (string)($_GET['prefix'] ?? '')) : '';
     ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="csrf" content="<?= h(csrf()) ?>">
 <title><?= h($title) ?> - <?= h($siteTitle) ?></title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
@@ -813,11 +785,12 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
         <img src="<?= h($config['logo_path'] ?? 'assets/logo.png') ?>" alt="LUFLY">
         <span class="logo-text"><?= h($siteTitle) ?></span>
     </a>
+    <nav class="top-nav"><a href="?action=home">المنتجات</a><a href="?action=archive_list">الأرشيف</a><a href="?action=settings">الإعدادات</a></nav>
     <a href="?action=logout" class="logout-btn" title="تسجيل الخروج"><i class="fas fa-sign-out-alt"></i></a>
 </div>
 
 <!-- ══ HERO BANNER ═══ -->
-<?php if (in_array($action, ['home','group','search'])): ?>
+<?php if ($d && in_array($action, ['home','group','search'])): ?>
 <div class="hero-banner">
     <div class="hero-inner">
         <div class="hero-text">
@@ -863,6 +836,11 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
             </div>
         </div>
         
+        <form method="get" class="toolbar" role="search">
+            <input type="hidden" name="action" value="search">
+            <input type="search" class="toolbar-search" name="q" placeholder="ابحث بالكود أو الوصف أو الماركة" value="<?= h($_GET['q'] ?? '') ?>">
+            <button type="submit" class="card-btn">بحث</button>
+        </form>
         <?= $content ?>
     </div>
 </div>
@@ -880,6 +858,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 <!-- ═══ TOAST ═══ -->
 <div id="toast"></div>
 
+<?php sidebarAssets(); ?>
 <?= $extraJs ?>
 <script>
 const csrfToken = document.querySelector('meta[name="csrf"]')?.content || '';
@@ -894,6 +873,7 @@ window.inlineEdit = function(el, field, productId, productVersion) {
         if (f !== form) f.classList.remove('active');
     });
     
+    form.onclick = event => event.stopPropagation();
     form.classList.add('active');
     const input = form.querySelector('input, textarea, select');
     if (input) input.focus();
@@ -903,7 +883,6 @@ window.inlineEdit = function(el, field, productId, productVersion) {
     
     saveBtn.onclick = function() {
         const value = input.value.trim();
-        if (!value) return;
         
         const fd = new FormData();
         fd.append('csrf', csrfToken);
@@ -919,8 +898,20 @@ window.inlineEdit = function(el, field, productId, productVersion) {
             if (data.ok) {
                 const valueEl = el.querySelector('.inline-field-value');
                 if (valueEl) {
-                    valueEl.textContent = data.value;
+                    valueEl.textContent = data.value || '— اضغط للتعديل —';
                     valueEl.dataset.value = data.value;
+                    const card = el.closest('.product-card');
+                    if (field === 'status') {
+                        const labels = {'Running':'نشط', 'New Model':'موديل جديد', 'Slow Moving':'بطيء', 'Aging':'قديم'};
+                        const badge = card.querySelector('.card-carousel .status-badge');
+                        badge.textContent = labels[data.value] || data.value;
+                        badge.className = 'status-badge ' + data.value.replaceAll(' ', '-');
+                        valueEl.replaceChildren(badge.cloneNode(true));
+                    } else if (field === 'code') {
+                        const badge = card.querySelector('.code-badge');
+                        badge.innerHTML = '<i class="fas fa-hashtag"></i> ';
+                        badge.appendChild(document.createTextNode(data.value || '—'));
+                    }
                 }
                 form.classList.remove('active');
                 showToast('تم الحفظ', 'success');
@@ -939,12 +930,12 @@ window.inlineEdit = function(el, field, productId, productVersion) {
 // ═══ LIGHTBOX ═══
 const lbState = { idx: 0, total: 0, productId: 0, images: [], mediaIds: [] };
 
-window.openLightbox = function(idx, total, productId, images) {
+window.openLightbox = function(idx, total, productId, images, mediaIds) {
     lbState.idx = idx;
     lbState.total = total;
     lbState.productId = productId;
     lbState.images = images;
-    lbState.mediaIds = []; // Will be populated if needed
+    lbState.mediaIds = mediaIds;
     updateLightbox();
     document.getElementById('lightbox').classList.add('active');
     document.body.style.overflow = 'hidden';
@@ -962,7 +953,7 @@ function updateLightbox() {
         </form>
     `;
     document.getElementById('lbReplaceFile').onchange = function() {
-        if (this.files[0]) mediaAction('replace', 0, lbState.productId, this.files[0]);
+        if (this.files[0]) mediaAction('replace', lbState.mediaIds[lbState.idx], lbState.productId, this.files[0]);
     };
 }
 
@@ -985,6 +976,32 @@ window.cancelReplace = function() {
     document.getElementById('lbReplaceForm').style.display = 'none';
 };
 
+// Keep the card and lightbox in sync, including when the lightbox is reopened.
+function syncCardMedia(productId, mediaId, path) {
+    const card = document.querySelector('.product-card[data-id="' + productId + '"]');
+    if (!card) return;
+    const image = card.querySelector('[data-media-id="' + mediaId + '"]');
+    if (!image) return;
+    if (path) { image.src = path; return; }
+    image.remove();
+    const images = card.querySelectorAll('.lightbox-trigger');
+    images.forEach((img, idx) => { img.dataset.idx = idx; });
+    const container = card.querySelector('.card-carousel-imgs');
+    container.dataset.current = '0';
+    container.style.transform = 'translateX(0%)';
+    card.querySelector('.media-count').innerHTML = '<i class="fas fa-paperclip"></i> ' + images.length;
+    const dots = card.querySelector('.carousel-dots');
+    if (dots) {
+        dots.innerHTML = Array.from(images, (_, idx) => '<span class="carousel-dot' + (idx === 0 ? ' active' : '') + '"></span>').join('');
+    }
+    if (images.length <= 1) {
+        card.querySelectorAll('.carousel-btn, .carousel-dots').forEach(el => el.remove());
+    }
+    if (images.length === 0) {
+        container.innerHTML = '<div class="no-image"><i class="far fa-image"></i></div>';
+    }
+}
+
 window.deleteImage = function() {
     if (!confirm('هل تريد حذف هذه الصورة؟')) return;
     const mediaId = lbState.mediaIds[lbState.idx];
@@ -994,18 +1011,23 @@ window.deleteImage = function() {
     fd.append('csrf', csrfToken);
     fd.append('op', 'delete');
     fd.append('media_id', mediaId);
-    fd.append('product_id', lbState.productId);
+    const productId = lbState.productId;
+    fd.append('product_id', productId);
     
     fetch('?action=media_action', { method:'POST', body: fd })
     .then(r => r.json())
     .then(data => {
         if (data.ok) {
-            lbState.images.splice(lbState.idx, 1);
-            lbState.mediaIds.splice(lbState.idx, 1);
-            lbState.total--;
-            if (lbState.idx >= lbState.total) lbState.idx = Math.max(0, lbState.total - 1);
-            if (lbState.total === 0) { closeLightbox(); location.reload(); }
-            else updateLightbox();
+            syncCardMedia(productId, mediaId);
+            const idx = lbState.mediaIds.indexOf(mediaId);
+            if (lbState.productId === productId && idx !== -1) {
+                lbState.images.splice(idx, 1);
+                lbState.mediaIds.splice(idx, 1);
+                lbState.total = lbState.images.length;
+                lbState.idx = Math.min(lbState.idx, Math.max(0, lbState.total - 1));
+                if (lbState.total === 0) closeLightbox();
+                else updateLightbox();
+            }
             showToast('تم حذف الصورة', 'success');
         } else { showToast(data.error || 'خطأ', 'error'); }
     })
@@ -1014,6 +1036,7 @@ window.deleteImage = function() {
 
 window.mediaAction = function(op, mediaId, productId, file) {
     if (!file) return;
+    if (op === 'replace' && !mediaId) { showToast('معرف الصورة غير متوفر', 'error'); return; }
     const fd = new FormData();
     fd.append('csrf', csrfToken);
     fd.append('op', op);
@@ -1031,11 +1054,15 @@ window.mediaAction = function(op, mediaId, productId, file) {
             if (op === 'add') { location.reload(); }
             else if (op === 'replace') {
                 const ts = '?t=' + Date.now();
-                lbState.images[lbState.idx] = data.path + ts;
-                lbState.mediaIds[lbState.idx] = data.media_id;
-                updateLightbox();
+                const path = data.path + ts;
+                syncCardMedia(productId, mediaId, path);
+                const idx = lbState.mediaIds.indexOf(mediaId);
+                if (lbState.productId === productId && idx !== -1) {
+                    lbState.images[idx] = path;
+                    lbState.mediaIds[idx] = Number(data.media_id);
+                    updateLightbox();
+                }
                 showToast('تم استبدال الصورة', 'success');
-                cancelReplace();
             }
         } else { showToast(data.error || 'خطأ', 'error'); }
     })
@@ -1071,11 +1098,13 @@ document.addEventListener('click', function(e) {
     const idx = parseInt(trigger.dataset.idx);
     
     // Get all images from this card
-    const images = Array.from(card.querySelectorAll('.lightbox-trigger')).map(img => img.src);
+    const triggers = Array.from(card.querySelectorAll('.lightbox-trigger'));
+    const images = triggers.map(img => img.src);
+    const mediaIds = triggers.map(img => Number(img.dataset.mediaId));
     const total = images.length;
     
     if (total > 0) {
-        openLightbox(idx, total, productId, images);
+        openLightbox(idx, total, productId, images, mediaIds);
     }
 });
 
@@ -1084,7 +1113,6 @@ let selectedForVerify = new Set();
 
 window.toggleVerify = function(el, productId) {
     const card = el.closest('.product-card');
-    const isCurrentlyVerified = card.classList.contains('verified');
     
     const fd = new FormData();
     fd.append('csrf', csrfToken);
@@ -1116,7 +1144,8 @@ window.bulkVerifySelected = function() {
     
     const fd = new FormData();
     fd.append('csrf', csrfToken);
-    fd.append('ids', JSON.stringify(Array.from(selectedForVerify)));
+    const submittedIds = Array.from(selectedForVerify);
+    fd.append('ids', JSON.stringify(submittedIds));
     
     showToast('جاري تأكيد ' + selectedForVerify.size + ' منتج...');
     
@@ -1125,7 +1154,7 @@ window.bulkVerifySelected = function() {
     .then(data => {
         if (data.ok) {
             // Update UI
-            selectedForVerify.forEach(id => {
+            submittedIds.forEach(id => {
                 const card = document.querySelector('.product-card[data-id="'+id+'"]');
                 if (card) {
                     card.classList.add('verified');
@@ -1134,7 +1163,8 @@ window.bulkVerifySelected = function() {
                     if (icon) icon.innerHTML = '<i class="fas fa-check-circle verified-icon"></i>';
                 }
             });
-            selectedForVerify.clear();
+            submittedIds.forEach(id => selectedForVerify.delete(id));
+            clearSelectionOutlines(submittedIds);
             updateBulkBar();
             showToast('تم تأكيد ' + data.count + ' منتج بنجاح', 'success');
         } else {
@@ -1144,7 +1174,15 @@ window.bulkVerifySelected = function() {
     .catch(() => showToast('خطأ في الاتصال', 'error'));
 };
 
+function clearSelectionOutlines(ids) {
+    ids.forEach(id => {
+        const card = document.querySelector('.product-card[data-id="' + id + '"]');
+        if (card) { card.style.outline = ''; card.style.outlineOffset = ''; }
+    });
+}
+
 window.clearSelection = function() {
+    clearSelectionOutlines(selectedForVerify);
     selectedForVerify.clear();
     updateBulkBar();
 };
@@ -1180,7 +1218,6 @@ document.addEventListener('click', function(e) {
     updateBulkBar();
 });
 </script>
-<meta name="csrf" content="<?= h(csrf()) ?>">
 </body>
 </html>
     <?php
@@ -1195,11 +1232,9 @@ function productCardHTML(array $p): string {
     // Build carousel
     $carouselImgs = '';
     $carouselDots = '';
-    $mediaIds = [];
     foreach ($previewable as $i => $m) {
-        $carouselImgs .= '<img src="'.h($m['path']).'" data-idx="'.$i.'" data-product="'.$p['id'].'" class="lightbox-trigger">';
+        $carouselImgs .= '<img src="'.h($m['path']).'" data-idx="'.$i.'" data-media-id="'.(int)$m['id'].'" data-product="'.$p['id'].'" class="lightbox-trigger">';
         $carouselDots .= '<span class="carousel-dot'.($i===0?' active':'').'"></span>';
-        $mediaIds[] = (int)$m['id'];
     }
     
     $statusClass = str_replace(' ', '-', $p['status']);
@@ -1303,19 +1338,27 @@ function updateDots(carousel, idx) {
         dot.classList.toggle('active', i === idx);
     });
 }
-function archiveProduct(id) {
-    if (!confirm('هل تريد أرشفة هذا المنتج؟')) return;
+function productAction(action, id, message) {
+    if (!confirm(message)) return;
     const fd = new FormData();
     fd.append('csrf', csrfToken);
     fd.append('id', id);
-    fetch('?action=archive', { method:'POST', body: fd }).then(() => location.reload());
+    fetch('?action=' + action, { method:'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) location.reload();
+        else showToast(data.error || 'تعذر تنفيذ العملية', 'error');
+    })
+    .catch(() => showToast('خطأ في الاتصال، حاول مرة أخرى', 'error'));
+}
+function archiveProduct(id) {
+    productAction('archive', id, 'هل تريد أرشفة هذا المنتج؟');
+}
+function restoreProduct(id) {
+    productAction('restore', id, 'هل تريد استعادة هذا المنتج؟');
 }
 function deleteProduct(id) {
-    if (!confirm('هل تريد حذف هذا المنتج نهائياً؟')) return;
-    const fd = new FormData();
-    fd.append('csrf', csrfToken);
-    fd.append('id', id);
-    fetch('?action=delete', { method:'POST', body: fd }).then(() => location.reload());
+    productAction('delete', id, 'هل تريد حذف هذا المنتج نهائياً مع مرفقاته؟');
 }
 </script>
 <?php
@@ -1349,7 +1392,41 @@ function showHome(int $page): void {
     <?php renderProducts($paged, $page, $totalPages, '?action=home'); ?>
     <?php
     
-    layout('الرئيسية', ob_get_clean(), $groups, '', (string)($action ?? 'home'));
+    layout('الرئيسية', ob_get_clean(), $groups, '', 'home');
+}
+
+function showSettings(): void {
+    $d = db();
+    ob_start();
+    ?>
+    <form method="post" action="?action=save_settings" class="toolbar" style="align-items:stretch;flex-direction:column">
+        <h2>الإعدادات</h2>
+        <?= token() ?>
+        <label>عنوان الموقع <input class="toolbar-search" name="site_title" required maxlength="190" value="<?= h(setting($d, 'site_title', 'LUFLY Catalog')) ?>"></label>
+        <label>اللون الأساسي <input type="color" name="primary_color" value="<?= h(setting($d, 'primary_color', '#1F9E9E')) ?>"></label>
+        <label>اللون الثانوي <input type="color" name="secondary_color" value="<?= h(setting($d, 'secondary_color', '#147070')) ?>"></label>
+        <button type="submit" class="card-btn">حفظ الإعدادات</button>
+    </form>
+    <?php
+    layout('الإعدادات', ob_get_clean(), getGroups($d), '', 'settings');
+}
+
+function showArchive(int $page): void {
+    $d = db();
+    $products = allProducts($d, true);
+    $totalPages = max(1, (int)ceil(count($products) / 12));
+    $page = max(1, min($page, $totalPages));
+    ob_start();
+    echo '<div class="toolbar"><div class="toolbar-title">الأرشيف</div><div class="toolbar-count">'.count($products).' منتج</div></div>';
+    if (!$products) echo '<p>لا توجد منتجات في الأرشيف</p>';
+    foreach (array_slice($products, ($page - 1) * 12, 12) as $p) {
+        echo '<div class="toolbar"><strong>'.h($p['code']).'</strong><span>'.h($p['description']).'</span>'
+            .'<button class="card-btn" onclick="restoreProduct('.(int)$p['id'].')">استعادة</button>'
+            .'<button class="card-btn danger" onclick="deleteProduct('.(int)$p['id'].')">حذف نهائي</button></div>';
+    }
+    if ($page > 1) echo '<a class="card-btn" href="?action=archive_list&page='.($page - 1).'">السابق</a>';
+    if ($page < $totalPages) echo '<a class="card-btn" href="?action=archive_list&page='.($page + 1).'">التالي</a>';
+    layout('الأرشيف', ob_get_clean(), getGroups($d), '', 'archive_list');
 }
 
 // ─── GROUP VIEW ────────────────────────────────────────────
@@ -1375,7 +1452,7 @@ function showGroup(string $prefix, int $page): void {
     <?php
     
     $groups = getGroups($d);
-    layout('مجموعة '.$prefix, ob_get_clean(), $groups, '', (string)($action ?? 'home'));
+    layout('مجموعة '.$prefix, ob_get_clean(), $groups, '', 'group');
 }
 
 // ─── SEARCH ────────────────────────────────────────────────
@@ -1403,7 +1480,7 @@ function showSearch(string $q, int $page): void {
     <?php
     
     $groups = getGroups($d);
-    layout('بحث: '.$q, ob_get_clean(), $groups, '', (string)($action ?? 'home'));
+    layout('بحث: '.$q, ob_get_clean(), $groups, '', 'search');
 }
 
 // ─── ERROR PAGES ───────────────────────────────────────────

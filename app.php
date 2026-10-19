@@ -21,7 +21,7 @@ if (is_file(__DIR__ . '/config.local.php'))
 // Auto-detect: if driver is mysql but MySQL is unreachable, silently fall back to SQLite
 if (($config['driver'] ?? 'mysql') === 'mysql') {
     try {
-        $testPdo = @new PDO('mysql:host=127.0.0.1;port=3306', $config['username'] ?? 'root', $config['password'] ?? '', [PDO::ATTR_TIMEOUT => 2]);
+        $testPdo = @new PDO('mysql:host=' . $config['host'] . ';port=' . (int)$config['port'], $config['username'] ?? 'root', $config['password'] ?? '', [PDO::ATTR_TIMEOUT => 2]);
         $testPdo = null; // MySQL is reachable, keep mysql driver
     } catch (Throwable $e) {
         // MySQL not reachable, fall back to SQLite automatically
@@ -46,7 +46,10 @@ function token(): string
     return '<input type="hidden" name="csrf" value="' . h(csrf()) . '">';
 }
 function checkCsrf(): void
-{ /* disabled - protected by APP_PASSWORD auth */
+{
+    $submitted = (string)($_POST['csrf'] ?? '');
+    if (empty($_SESSION['csrf']) || !hash_equals($_SESSION['csrf'], $submitted))
+        throw new RuntimeException('انتهت صلاحية الطلب. حدّث الصفحة وحاول مرة أخرى.');
 }
 function go(string $url): void
 {
@@ -213,8 +216,9 @@ function saveProduct(PDO $db): int
     if (!in_array($kind, ['photo', 'drawing', 'extra'], true))
         throw new RuntimeException('نوع المرفق غير صالح.');
     $files = uploadFiles();
-    $db->beginTransaction();
+    $removedPaths = [];
     try {
+        $db->beginTransaction();
         $now = date('c');
         if ($id) {
             $s = run($db, 'UPDATE products SET code=?,brand=?,status=?,description=?,notes=?,version=version+1,updated_at=? WHERE id=? AND version=? AND archived=0', [$code, $brand, $status, $description, $notes, $now, $id, (int) ($_POST['version'] ?? 0)]);
@@ -228,6 +232,7 @@ function saveProduct(PDO $db): int
             $mid = $m['id'];
             if (isset($_POST['remove_media'][$mid])) {
                 run($db, 'DELETE FROM media WHERE id=? AND product_id=?', [$mid, $id]);
+                $removedPaths[] = $m['path'];
                 continue;
             }
             $caption = (string) ($_POST['caption'][$mid] ?? $m['caption']);
@@ -239,7 +244,6 @@ function saveProduct(PDO $db): int
         foreach ($files as $i => $m)
             run($db, 'INSERT INTO media (product_id,path,original_name,kind,caption,sort_order,previewable,source_column,source_row,sha256) VALUES (?,?,?,?,?,?,?,?,?,?)', [$id, $m['path'], $m['original_name'], $kind, '', 10000 + $i, 1, '', 0, $m['sha256']]);
         $db->commit();
-        return $id;
     } catch (Throwable $e) {
         if ($db->inTransaction())
             $db->rollBack();
@@ -247,6 +251,8 @@ function saveProduct(PDO $db): int
             @unlink(__DIR__ . '/' . $m['path']);
         throw $e;
     }
+    foreach (array_unique($removedPaths) as $path) deleteMediaFile($db, $path);
+    return $id;
 }
 function allProducts(PDO $db, bool $archived = false): array
 {
@@ -270,19 +276,83 @@ function mediaLabel(string $kind): string
     return ['photo' => 'صورة المنتج', 'drawing' => 'رسم فني', 'extra' => 'صورة إضافية'][$kind] ?? 'مرفق';
 }
 
-// Safely delete a media file only if no other product uses it
+// Safely delete catalog/upload files only after their last database reference is gone.
 function deleteMediaFile(PDO $db, string $path): void
 {
     $normalizedPath = ltrim(str_replace('\\', '/', $path), '/');
-
-    // Check if any other media record uses this same file
-    $usedElsewhere = (int) run($db, 'SELECT COUNT(*) FROM media WHERE path=?', [$normalizedPath])->fetchColumn();
-
-    if ($usedElsewhere === 0) {
-        // No other references, safe to delete the physical file
-        $fullPath = __DIR__ . '/' . $normalizedPath;
-        if (is_file($fullPath)) {
+    if ((int)run($db, 'SELECT COUNT(*) FROM media WHERE path=?', [$path])->fetchColumn() > 0)
+        return;
+    $fullPath = realpath(__DIR__ . '/' . $normalizedPath);
+    if ($fullPath === false) return;
+    foreach (['uploads', 'assets/catalog'] as $directory) {
+        $root = realpath(__DIR__ . '/' . $directory);
+        if ($root !== false && str_starts_with($fullPath, $root . DIRECTORY_SEPARATOR) && is_file($fullPath)) {
             @unlink($fullPath);
+            return;
         }
     }
+}
+
+function requireProduct(PDO $db, int $id, bool $activeOnly = true): array
+{
+    $product = run($db, 'SELECT * FROM products WHERE id=?' . ($activeOnly ? ' AND archived=0' : ''), [$id])->fetch();
+    if (!$product) throw new RuntimeException('المنتج غير موجود أو تم نقله للأرشيف');
+    return $product;
+}
+
+function deleteProductRecord(PDO $db, int $id): void
+{
+    $db->beginTransaction();
+    try {
+        requireProduct($db, $id, false);
+        $media = mediaFor($db, $id);
+        run($db, 'DELETE FROM media WHERE product_id=?', [$id]);
+        run($db, 'DELETE FROM products WHERE id=?', [$id]);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+    foreach (array_unique(array_column($media, 'path')) as $path) deleteMediaFile($db, $path);
+}
+
+function changeMedia(PDO $db, string $op, int $productId, int $mediaId, string $kind = 'photo'): array
+{
+    if (!in_array($op, ['add', 'replace', 'delete'], true)) throw new RuntimeException('عملية غير صالحة');
+    if ($op !== 'add' && $mediaId <= 0) throw new RuntimeException('معرف الصورة مطلوب');
+    if (!in_array($kind, ['photo', 'drawing', 'extra'], true)) throw new RuntimeException('نوع غير صالح');
+    requireProduct($db, $productId);
+    $old = null;
+    if ($op !== 'add') {
+        $old = run($db, 'SELECT * FROM media WHERE id=? AND product_id=?', [$mediaId, $productId])->fetch();
+        if (!$old) throw new RuntimeException('الصورة غير موجودة');
+    }
+    $files = $op === 'delete' ? [] : uploadFiles('file');
+    if ($op !== 'delete' && count($files) !== 1) {
+        foreach ($files as $file) deleteMediaFile($db, $file['path']);
+        throw new RuntimeException('اختر صورة واحدة للرفع');
+    }
+    try {
+        $db->beginTransaction();
+        if ($op === 'delete') {
+            run($db, 'DELETE FROM media WHERE id=? AND product_id=?', [$mediaId, $productId]);
+        } elseif ($op === 'replace') {
+            $file = $files[0];
+            run($db, 'UPDATE media SET path=?,sha256=?,kind=?,original_name=? WHERE id=? AND product_id=?',
+                [$file['path'], $file['sha256'], $kind, $file['original_name'], $mediaId, $productId]);
+        } else {
+            $file = $files[0];
+            $sort = (int)run($db, 'SELECT MAX(sort_order) FROM media WHERE product_id=?', [$productId])->fetchColumn();
+            run($db, 'INSERT INTO media (product_id,path,original_name,kind,caption,sort_order,previewable,sha256) VALUES (?,?,?,?,?,?,1,?)',
+                [$productId, $file['path'], $file['original_name'], $kind, '', $sort + 1, $file['sha256']]);
+            $mediaId = (int)$db->lastInsertId();
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        foreach ($files as $file) deleteMediaFile($db, $file['path']);
+        throw $e;
+    }
+    if ($old) deleteMediaFile($db, $old['path']);
+    return ['ok'=>true, 'op'=>$op, 'media_id'=>$mediaId] + ($files ? ['path'=>$files[0]['path']] : []);
 }

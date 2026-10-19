@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-session_start();
+require __DIR__.'/app.php';
 
 // If already logged in, redirect to main page
 if (!empty($_SESSION['lufly_auth']) && $_SESSION['lufly_auth'] === true) {
@@ -9,7 +9,6 @@ if (!empty($_SESSION['lufly_auth']) && $_SESSION['lufly_auth'] === true) {
 }
 
 // Load config to get password
-$config = require __DIR__.'/config.php';
 $appPassword = $config['app_password'] ?? '';
 
 $error = '';
@@ -20,6 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($appPassword === '' || $input === '') {
         $error = 'الرجاء إدخال كلمة المرور';
     } elseif (hash_equals($appPassword, $input)) {
+        session_regenerate_id(true);
         $_SESSION['lufly_auth'] = true;
         $_SESSION['lufly_login_time'] = time();
         header('Location: index.php');

@@ -17,11 +17,10 @@ function getGroupIcon(string $prefix): string {
 }
 
 function getGroups(PDO $db): array {
-    $rows = $db->query('SELECT code FROM products WHERE archived=0 AND code!=""')->fetchAll(PDO::FETCH_COLUMN);
+    $rows = $db->query('SELECT code FROM products WHERE archived=0')->fetchAll(PDO::FETCH_COLUMN);
     $groups = [];
     foreach ($rows as $code) {
-        $pos = strpos($code, '-');
-        $prefix = $pos !== false && $pos > 0 ? strtoupper(trim(substr($code, 0, $pos))) : 'غير مصنف';
+        $prefix = groupCode($code);
         $groups[$prefix] = ($groups[$prefix] ?? 0) + 1;
     }
     arsort($groups);
@@ -63,12 +62,11 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
     // Get first image for each group
     $d = db();
     $firstImages = [];
-    $stmt = $d->query('SELECT p.id, p.code, m.path FROM products p JOIN media m ON m.product_id=p.id AND m.previewable=1 WHERE p.archived=0 GROUP BY p.id ORDER BY m.sort_order, m.id');
+    $stmt = $d->query('SELECT p.id, p.code, (SELECT m.path FROM media m WHERE m.product_id=p.id AND m.previewable=1 ORDER BY m.sort_order,m.id LIMIT 1) AS path FROM products p WHERE p.archived=0 ORDER BY p.id');
     $seen = [];
     while ($row = $stmt->fetch()) {
-        $pos = strpos($row['code'], '-');
-        $prefix = $pos !== false && $pos > 0 ? strtoupper(trim(substr($row['code'], 0, $pos))) : 'غير مصنف';
-        if (!isset($seen[$prefix])) {
+        $prefix = groupCode($row['code']);
+        if ($row['path'] && !isset($seen[$prefix])) {
             $firstImages[$prefix] = $row['path'];
             $seen[$prefix] = true;
         }
@@ -96,7 +94,7 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
             $isActive = (string)$prefix === $activePrefix;
             $icon = getGroupIcon((string)$prefix);
             $thumb = $firstImages[(string)$prefix] ?? '';
-            $html .= '<a href="#" class="sidebar-group ' . ($isActive ? 'active' : '') . '" data-prefix="' . htmlspecialchars((string)$prefix) . '" onclick="filterByGroup(\'' . h((string)$prefix) . '\'); return false;">';
+            $html .= '<a href="?action=group&amp;prefix=' . rawurlencode((string)$prefix) . '" class="sidebar-group ' . ($isActive ? 'active' : '') . '" data-prefix="' . h((string)$prefix) . '">';
             if ($thumb) {
                 $html .= '<img src="' . h($thumb) . '" class="sidebar-thumb" alt="">';
             } else {
@@ -111,13 +109,14 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
     $html .= '</div>';
     
     $html .= '<div class="sidebar-footer">';
-    $html .= '<a href="#" class="sidebar-all-btn" onclick="showAllProducts(); return false;"><i class="fas fa-home"></i> عرض كل المنتجات</a>';
+    $html .= '<a href="?action=home" class="sidebar-all-btn"><i class="fas fa-home"></i> عرض كل المنتجات</a>';
     $html .= '</div>';
     $html .= '</div>';
     return $html;
 }
-?>
 
+function sidebarAssets(): void {
+?>
 <style>
 /* ══ Sidebar ══ */
 .sidebar {
@@ -297,69 +296,6 @@ if (sidebarSearch) {
     });
 }
 
-// Filter products by group (SPA style - no page reload)
-window.filterByGroup = function(prefix) {
-    // Update active state in sidebar
-    document.querySelectorAll('.sidebar-group').forEach(el => el.classList.remove('active'));
-    const activeLink = document.querySelector('.sidebar-group[data-prefix="' + prefix + '"]');
-    if (activeLink) activeLink.classList.add('active');
-    
-    // Show loading
-    const grid = document.querySelector('.products-grid');
-    if (grid) {
-        grid.style.opacity = '0.5';
-        grid.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding:40px;"><i class="fas fa-spinner fa-spin" style="font-size:2rem; color:var(--primary);"></i></div>';
-    }
-    
-    // Fetch filtered products
-    fetch('?action=api_products&prefix=' + encodeURIComponent(prefix))
-    .then(r => r.json())
-    .then(data => {
-        if (data.ok) {
-            if (grid) {
-                grid.innerHTML = data.html;
-                grid.style.opacity = '1';
-            }
-            // Update title
-            const titleEl = document.querySelector('.toolbar-title');
-            if (titleEl) titleEl.textContent = 'مجموعة الكود: ' + prefix;
-        }
-    })
-    .catch(err => {
-        console.error(err);
-        if (grid) {
-            grid.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding:40px; color:var(--danger);"><i class="fas fa-exclamation-circle"></i> خطأ في تحميل البيانات</div>';
-            grid.style.opacity = '1';
-        }
-    });
-};
-
-// Show all products
-window.showAllProducts = function() {
-    document.querySelectorAll('.sidebar-group').forEach(el => el.classList.remove('active'));
-    
-    const grid = document.querySelector('.products-grid');
-    if (grid) {
-        grid.style.opacity = '0.5';
-        grid.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding:40px;"><i class="fas fa-spinner fa-spin" style="font-size:2rem; color:var(--primary);"></i></div>';
-    }
-    
-    fetch('?action=api_products&prefix=')
-    .then(r => r.json())
-    .then(data => {
-        if (data.ok && grid) {
-            grid.innerHTML = data.html;
-            grid.style.opacity = '1';
-        }
-        const titleEl = document.querySelector('.toolbar-title');
-        if (titleEl) titleEl.textContent = 'تصفح كل المنتجات';
-    })
-    .catch(err => {
-        console.error(err);
-        if (grid) {
-            grid.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding:40px; color:var(--danger);"><i class="fas fa-exclamation-circle"></i> خطأ</div>';
-            grid.style.opacity = '1';
-        }
-    });
-};
 </script>
+<?php
+}
