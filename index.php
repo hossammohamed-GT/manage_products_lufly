@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require __DIR__.'/app.php';
 require_once __DIR__.'/includes/sidebar.php';
+require_once __DIR__.'/includes/image_enhancement.php';
 
 // Authentication check
 $appPassword = $config['app_password'] ?? '';
@@ -14,6 +15,7 @@ if ($appPassword !== '') {
     
     // Session timeout after 8 hours
     if (isset($_SESSION['lufly_login_time']) && (time() - $_SESSION['lufly_login_time'] > 28800)) {
+        foreach (array_keys($_SESSION['enhancements'] ?? []) as $token) discardEnhancement($token);
         session_destroy();
         header('Location: login.php');
         exit;
@@ -34,6 +36,43 @@ try {
             $action = 'setup_error';
             $setupError = $e->getMessage();
         }
+    }
+
+    if ($action === 'enhancement_preview') {
+        try {
+            $preview = enhancementPreview(is_string($_GET['token'] ?? null) ? $_GET['token'] : '');
+            $original = ($_GET['original'] ?? '') === '1';
+            header('Content-Type: ' . ($original ? $preview['mime'] : 'image/png'));
+            header('Cache-Control: private, no-store');
+            readfile($original ? $preview['original_file'] : $preview['enhanced_file']);
+        } catch (Throwable $e) {
+            http_response_code(404);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo $e->getMessage();
+        }
+        exit;
+    }
+    if (in_array($action, ['enhancement_create', 'enhancement_approve', 'enhancement_cancel'], true)) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store');
+        try {
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') throw new RuntimeException('العملية تتطلب طلب حفظ');
+            checkCsrf();
+            $token = is_string($_POST['token'] ?? null) ? $_POST['token'] : '';
+            if ($action === 'enhancement_create') {
+                $result = createEnhancement(db(), (int)($_POST['product_id'] ?? 0), (int)($_POST['media_id'] ?? 0));
+            } elseif ($action === 'enhancement_approve') {
+                $result = approveEnhancement(db(), $token);
+            } else {
+                discardEnhancement($token);
+                $result = ['ok'=>true];
+            }
+            echo json_encode($result);
+        } catch (Throwable $e) {
+            http_response_code(400);
+            echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
+        }
+        exit;
     }
 
     // API endpoints
@@ -79,6 +118,7 @@ try {
 
     // Logout
     if ($action === 'logout') {
+        foreach (array_keys($_SESSION['enhancements'] ?? []) as $token) discardEnhancement($token);
         session_destroy();
         header('Location: login.php');
         exit;
@@ -720,6 +760,25 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     transition: all 0.2s;
     font-family: inherit;
 }
+.lb-enhance { background: #e2f7ef; color: #116348; }
+.lightbox-action-btn:disabled { opacity: .55; cursor: wait; }
+.lightbox-actions { max-width: 95vw; flex-wrap: wrap; justify-content: center; }
+.enhancement-panel { width: min(1080px, 90vw); max-height: calc(100dvh - 110px); overflow-y: auto; color: white; padding: 24px; background: #18212b; border: 1px solid #43505e; border-radius: 16px; }
+.enhancement-panel[hidden] { display: none; }
+.enhancement-panel h2 { margin-bottom: 8px; }
+.enhancement-panel p { color: #d5dde6; margin: 12px 0; }
+.enhancement-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.enhancement-compare figure { min-width: 0; }
+.enhancement-compare figcaption { padding: 8px; font-weight: bold; text-align: center; }
+.enhancement-compare img { width: 100%; height: min(48vh, 460px); object-fit: contain; background: #e6e9ec; border-radius: 10px; }
+.enhancement-decisions { display: flex; gap: 12px; flex-wrap: wrap; }
+@media (max-width: 650px) {
+    .enhancement-compare { grid-template-columns: 1fr; }
+    .enhancement-compare img { height: 28vh; }
+    .enhancement-panel { padding: 14px; }
+    .lightbox-actions { bottom: 12px; gap: 6px; padding: 10px; width: 95vw; }
+    .lightbox-action-btn { padding: 10px; }
+}
 .lb-replace { background: var(--primary); color: white; }
 .lb-replace:hover { background: var(--primary-dark); }
 .lb-delete { background: var(--danger); color: white; }
@@ -852,6 +911,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     <button class="lightbox-nav lightbox-prev" onclick="lbNav(-1)"><i class="fas fa-chevron-right"></i></button>
     <button class="lightbox-nav lightbox-next" onclick="lbNav(1)"><i class="fas fa-chevron-left"></i></button>
     <img class="lightbox-img" id="lbImg" src="" alt="">
+    <section id="lbEnhancement" class="enhancement-panel" hidden aria-label="مقارنة تحسين الصورة" aria-live="polite"></section>
     <div class="lightbox-actions" id="lbActions"></div>
 </div>
 
@@ -929,8 +989,11 @@ window.inlineEdit = function(el, field, productId, productVersion) {
 
 // ═══ LIGHTBOX ═══
 const lbState = { idx: 0, total: 0, productId: 0, images: [], mediaIds: [] };
+let enhancementState = null;
 
 window.openLightbox = function(idx, total, productId, images, mediaIds) {
+    if (enhancementState?.saving) return;
+    if (enhancementState) cancelEnhancement();
     lbState.idx = idx;
     lbState.total = total;
     lbState.productId = productId;
@@ -945,6 +1008,7 @@ function updateLightbox() {
     document.getElementById('lbImg').src = lbState.images[lbState.idx];
     document.getElementById('lbCounter').textContent = (lbState.idx + 1) + ' / ' + lbState.total;
     document.getElementById('lbActions').innerHTML = `
+        <button class="lightbox-action-btn lb-enhance" onclick="enhanceImage()"><i class="fas fa-wand-magic-sparkles"></i> تحسين الصورة</button>
         <button class="lightbox-action-btn lb-replace" onclick="triggerReplace()"><i class="fas fa-sync-alt"></i> استبدال</button>
         <button class="lightbox-action-btn lb-delete" onclick="deleteImage()"><i class="fas fa-trash"></i> حذف</button>
         <form class="lightbox-replace-form" id="lbReplaceForm" style="display:none;">
@@ -958,11 +1022,14 @@ function updateLightbox() {
 }
 
 window.closeLightbox = function() {
+    if (enhancementState?.saving) { showToast('جاري اعتماد التحسين، انتظر لحظة'); return; }
+    if (enhancementState) cancelEnhancement();
     document.getElementById('lightbox').classList.remove('active');
     document.body.style.overflow = '';
 };
 
 window.lbNav = function(dir) {
+    if (enhancementState || !lbState.total) return;
     lbState.idx = (lbState.idx + dir + lbState.total) % lbState.total;
     updateLightbox();
 };
@@ -1003,6 +1070,7 @@ function syncCardMedia(productId, mediaId, path) {
 }
 
 window.deleteImage = function() {
+    if (enhancementState) return;
     if (!confirm('هل تريد حذف هذه الصورة؟')) return;
     const mediaId = lbState.mediaIds[lbState.idx];
     if (!mediaId) { alert('معرف الصورة غير متوفر'); return; }
@@ -1035,6 +1103,7 @@ window.deleteImage = function() {
 };
 
 window.mediaAction = function(op, mediaId, productId, file) {
+    if (enhancementState) return;
     if (!file) return;
     if (op === 'replace' && !mediaId) { showToast('معرف الصورة غير متوفر', 'error'); return; }
     const fd = new FormData();
@@ -1067,6 +1136,117 @@ window.mediaAction = function(op, mediaId, productId, file) {
         } else { showToast(data.error || 'خطأ', 'error'); }
     })
     .catch(() => showToast('خطأ في الاتصال', 'error'));
+};
+
+function enhancementRequest(action, fields) {
+    const body = new FormData();
+    body.append('csrf', csrfToken);
+    Object.entries(fields).forEach(([key, value]) => body.append(key, value));
+    return fetch('?action=enhancement_' + action, {method: 'POST', body})
+        .then(response => response.json())
+        .then(data => { if (!data.ok) throw new Error(data.error || 'تعذر تحسين الصورة'); return data; });
+}
+
+function enhancementMode(active) {
+    document.getElementById('lbImg').style.display = active ? 'none' : '';
+    document.getElementById('lbActions').style.display = active ? 'none' : '';
+    document.querySelectorAll('#lightbox > .lightbox-nav').forEach(button => { button.style.display = active ? 'none' : ''; });
+    document.getElementById('lbEnhancement').hidden = !active;
+}
+
+window.cancelEnhancement = function() {
+    const state = enhancementState;
+    if (!state || state.saving) return;
+    enhancementState = null;
+    enhancementMode(false);
+    document.getElementById('lbEnhancement').replaceChildren();
+    if (state.token) enhancementRequest('cancel', {token: state.token}).catch(() => {});
+    document.querySelector('.lb-enhance')?.focus();
+};
+
+window.enhanceImage = function() {
+    if (enhancementState) return;
+    const mediaId = lbState.mediaIds[lbState.idx];
+    if (!mediaId) { showToast('معرف الصورة غير متوفر', 'error'); return; }
+    const state = {productId: lbState.productId, mediaId, token: null, ready: false, saving: false};
+    enhancementState = state;
+    enhancementMode(true);
+    const panel = document.getElementById('lbEnhancement');
+    panel.innerHTML = '<h2>تحسين الصورة</h2><p role="status">جاري تجهيز نسخة محسّنة للمقارنة… الصورة الأصلية لن تتغير قبل موافقتك.</p><button class="lightbox-action-btn" onclick="cancelEnhancement()">إلغاء والاحتفاظ بالأصل</button>';
+    enhancementRequest('create', {product_id: state.productId, media_id: state.mediaId})
+    .then(data => {
+        if (enhancementState !== state) {
+            enhancementRequest('cancel', {token: data.token}).catch(() => {});
+            return;
+        }
+        state.token = data.token;
+        panel.innerHTML = `
+            <h2>هل الصورة المحسّنة أفضل؟</h2>
+            <p>تحسين خفيف للحدة والتباين، بدون تكبير أو توليد تفاصيل جديدة. قارن ثم اختَر.</p>
+            <div class="enhancement-compare">
+                <figure><figcaption>قبل — الصورة الأصلية</figcaption><img id="enhanceBefore" alt="الصورة الأصلية قبل التحسين"></figure>
+                <figure><figcaption>بعد — الصورة المحسّنة</figcaption><img id="enhanceAfter" alt="معاينة الصورة المحسّنة"></figure>
+            </div>
+            <p id="enhancementStatus" role="status">جاري تحميل المعاينة…</p>
+            <div class="enhancement-decisions">
+                <button id="enhanceApprove" class="lightbox-action-btn lb-enhance" disabled onclick="approveImageEnhancement()">✓ اعتماد التحسين واستبدال الصورة</button>
+                <button id="enhanceCancel" class="lightbox-action-btn" onclick="cancelEnhancement()">إلغاء والاحتفاظ بالأصل</button>
+            </div>`;
+        let loaded = 0;
+        ['enhanceBefore', 'enhanceAfter'].forEach((id, index) => {
+            const image = document.getElementById(id);
+            image.onload = () => {
+                if (enhancementState !== state) return;
+                loaded++;
+                if (loaded === 2) {
+                    state.ready = true;
+                    document.getElementById('enhanceApprove').disabled = false;
+                    document.getElementById('enhancementStatus').textContent = 'الأصل محفوظ حتى تختار اعتماد التحسين. المعاينة صالحة لمدة 10 دقائق.';
+                }
+            };
+            image.onerror = () => {
+                if (enhancementState !== state) return;
+                state.ready = false;
+                document.getElementById('enhanceApprove').disabled = true;
+                document.getElementById('enhancementStatus').textContent = 'تعذر تحميل المعاينة. ألغِ وحاول مرة أخرى؛ الصورة الأصلية لم تتغير.';
+            };
+            image.src = index === 0 ? data.original_url : data.preview_url;
+        });
+        document.getElementById('enhanceCancel').focus();
+    })
+    .catch(error => {
+        if (enhancementState !== state) return;
+        cancelEnhancement();
+        showToast(error.message || 'خطأ في الاتصال', 'error');
+    });
+};
+
+window.approveImageEnhancement = function() {
+    const state = enhancementState;
+    if (!state?.token || !state.ready || state.saving) return;
+    state.saving = true;
+    document.getElementById('enhanceApprove').disabled = true;
+    document.getElementById('enhanceCancel').disabled = true;
+    document.getElementById('enhancementStatus').textContent = 'جاري اعتماد التحسين…';
+    enhancementRequest('approve', {token: state.token})
+    .then(data => {
+        const path = data.path + '?t=' + Date.now();
+        syncCardMedia(state.productId, state.mediaId, path);
+        const idx = lbState.mediaIds.indexOf(state.mediaId);
+        if (lbState.productId === state.productId && idx !== -1) lbState.images[idx] = path;
+        enhancementState = null;
+        enhancementMode(false);
+        document.getElementById('lbEnhancement').replaceChildren();
+        updateLightbox();
+        document.querySelector('.lb-enhance')?.focus();
+        showToast('تم اعتماد التحسين واستبدال الصورة', 'success');
+    })
+    .catch(error => {
+        state.saving = false;
+        document.getElementById('enhanceApprove').disabled = false;
+        document.getElementById('enhanceCancel').disabled = false;
+        document.getElementById('enhancementStatus').textContent = error.message || 'تعذر الحفظ. حاول مرة أخرى أو احتفظ بالأصل.';
+    });
 };
 
 function showToast(msg, type='success') {

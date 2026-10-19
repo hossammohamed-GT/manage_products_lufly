@@ -37,7 +37,7 @@ async function post(action, body = {}, ok = true) {
     return response.json;
 }
 async function evaluate(code) {
-    const response = await php.run({ code: '<?php require "/app/app.php"; $d=db(); ' + code });
+    const response = await php.run({ code: '<?php require "/app/app.php"; require_once "/app/includes/image_enhancement.php"; $d=db(); ' + code });
     assert.equal(response.errors, '', response.errors);
     assert.equal(response.exitCode, 0, response.text);
     return response.text ? JSON.parse(response.text) : undefined;
@@ -59,7 +59,7 @@ async function main() {
     php.mkdir('/app/data');
     php.mkdir('/app/uploads');
     php.mkdir('/app/assets/catalog');
-    for (const file of ['app.php', 'config.php', 'index.php', 'login.php', 'includes/sidebar.php', 'data/catalog.json', '.env.example']) {
+    for (const file of ['app.php', 'config.php', 'index.php', 'login.php', 'includes/sidebar.php', 'includes/image_enhancement.php', 'data/catalog.json', '.env.example']) {
         php.writeFile('/app/' + file, fs.readFileSync(path.join(root, file)));
     }
     php.writeFile('/app/config.local.php', `<?php return ['driver'=>'sqlite','sqlite_path'=>'/app/data/test.sqlite','app_password'=>'integration-test-only'];`);
@@ -83,7 +83,7 @@ async function main() {
         assert.equal(await evaluate("echo json_encode((int)$d->query('SELECT COUNT(*) FROM products')->fetchColumn());"), 715);
     });
     await check('all PHP entry files pass syntax parsing', async () => {
-        for (const file of ['app.php', 'config.php', 'index.php', 'login.php', 'includes/sidebar.php']) {
+        for (const file of ['app.php', 'config.php', 'index.php', 'login.php', 'includes/sidebar.php', 'includes/image_enhancement.php']) {
             const code = Buffer.from(fs.readFileSync(path.join(root, file))).toString('base64');
             await evaluate(`token_get_all(base64_decode('${code}'), TOKEN_PARSE);`);
         }
@@ -291,6 +291,209 @@ async function main() {
         assert.equal(document.getElementById('bulkVerifyBar').classList.contains('active'), false);
         document.querySelector('.sidebar-cat-btn').click();
         assert.equal(errors.length, 0, errors.map(e => e.message).join('\n'));
+        dom.window.close();
+    });
+    // Use a real, decodable GD fixture with texture and transparency, not just a PNG header.
+    const texture = Buffer.from(await evaluate("$im=imagecreatetruecolor(40,32); imagealphablending($im,false); imagesavealpha($im,true); imagefill($im,0,0,imagecolorallocatealpha($im,0,0,0,127)); imagefilledrectangle($im,5,5,30,26,imagecolorallocate($im,100,120,140)); imageline($im,5,10,30,10,imagecolorallocate($im,190,190,190)); ob_start(); imagepng($im); $png=ob_get_clean(); imagedestroy($im); echo json_encode(base64_encode($png));"), 'base64');
+    await product(100010);
+    await product(100011);
+    let enhancedMedia = await upload(100010, 'add', 0, texture);
+    const enhancementFields = () => ({ product_id: '100010', media_id: String(enhancedMedia.media_id) });
+    const dbMedia = () => evaluate(`echo json_encode(run($d,'SELECT * FROM media WHERE id=?',[${enhancedMedia.media_id}])->fetch());`);
+    await check('enhancement previews leave the original unchanged and cancellation deletes only temporary files', async () => {
+        const before = await dbMedia();
+        const preview = await post('enhancement_create', enhancementFields());
+        assert.deepEqual(await dbMedia(), before);
+        assert.ok(php.fileExists('/app/' + enhancedMedia.path));
+        const original = await request('enhancement_preview&token=' + preview.token + '&original=1');
+        const improved = await request('enhancement_preview&token=' + preview.token);
+        assert.equal(original.httpStatusCode, 200);
+        assert.equal(improved.httpStatusCode, 200);
+        assert.equal(improved.headers['content-type'][0], 'image/png');
+        assert.match(improved.headers['cache-control'][0], /no-store/);
+        assert.deepEqual(Buffer.from(original.bytes), texture);
+        const pixels = await evaluate(`$a=imagecreatefromstring(base64_decode('${texture.toString('base64')}')); $b=imagecreatefromstring(base64_decode('${Buffer.from(improved.bytes).toString('base64')}')); echo json_encode([imagesx($b),imagesy($b),imagecolorsforindex($b,imagecolorat($b,0,0))['alpha'],imagecolorat($a,10,10)!==imagecolorat($b,10,10)]);`);
+        assert.deepEqual(pixels, [40,32,127,true]);
+        await post('enhancement_cancel', { token: preview.token });
+        assert.equal((await request('enhancement_preview&token=' + preview.token)).httpStatusCode, 404);
+        await post('enhancement_approve', { token: preview.token }, false);
+        assert.deepEqual(await dbMedia(), before);
+    });
+    await check('explicit enhancement approval replaces only the chosen image and preserves shared files and metadata', async () => {
+        const originalPath = enhancedMedia.path;
+        await evaluate(`run($d,'INSERT INTO media (product_id,path,original_name,kind) VALUES (?,?,?,?)',[100011,'${originalPath}','shared.png','drawing']); run($d,'UPDATE media SET kind=?,caption=?,sort_order=? WHERE id=?',['drawing','Keep caption',17,${enhancedMedia.media_id}]);`);
+        const before = await dbMedia();
+        const preview = await post('enhancement_create', enhancementFields());
+        const result = await post('enhancement_approve', { token: preview.token });
+        const after = await dbMedia();
+        assert.equal(result.media_id, enhancedMedia.media_id);
+        assert.notEqual(after.path, before.path);
+        assert.notEqual(after.sha256, before.sha256);
+        for (const field of ['kind','caption','sort_order','original_name','previewable']) assert.equal(after[field], before[field]);
+        assert.ok(php.fileExists('/app/' + originalPath));
+        assert.ok(php.fileExists('/app/' + result.path));
+        await post('enhancement_approve', { token: preview.token }, false);
+        assert.equal((await request('enhancement_preview&token=' + preview.token)).httpStatusCode, 404);
+        await post('delete', { id: '100011' });
+        assert.equal(php.fileExists('/app/' + originalPath), false);
+        enhancedMedia = result;
+    });
+    await check('stale enhancement approvals never overwrite a replacement made after preview', async () => {
+        const preview = await post('enhancement_create', enhancementFields());
+        enhancedMedia = await upload(100010, 'replace', enhancedMedia.media_id, texture);
+        const before = await dbMedia();
+        await post('enhancement_approve', { token: preview.token }, false);
+        assert.deepEqual(await dbMedia(), before);
+        const snapshot = await request('enhancement_preview&token=' + preview.token + '&original=1');
+        assert.equal(snapshot.httpStatusCode, 200);
+        await post('enhancement_cancel', { token: preview.token });
+    });
+    await check('failed enhancement database writes preserve the original and remove the new upload', async () => {
+        const preview = await post('enhancement_create', enhancementFields());
+        const before = await dbMedia();
+        const files = await evaluate("echo json_encode(glob('/app/uploads/*'));" );
+        await evaluate("$d->exec(\"CREATE TRIGGER prevent_enhance BEFORE UPDATE ON media BEGIN SELECT RAISE(ABORT, 'test rollback'); END\");");
+        await post('enhancement_approve', { token: preview.token }, false);
+        await evaluate("$d->exec('DROP TRIGGER prevent_enhance');");
+        assert.deepEqual(await dbMedia(), before);
+        assert.deepEqual(await evaluate("echo json_encode(glob('/app/uploads/*'));"), files);
+        await post('enhancement_cancel', { token: preview.token });
+    });
+    await check('enhancement endpoints validate CSRF, ownership, archive state, tokens and resource limits', async () => {
+        await post('enhancement_create', { ...enhancementFields(), csrf: '' }, false);
+        await post('enhancement_create', { ...enhancementFields(), product_id: '100004' }, false);
+        await post('enhancement_approve', { token: '../../index.php' }, false);
+        const preview = await post('enhancement_create', enhancementFields());
+        await post('enhancement_cancel', { token: preview.token, csrf: '' }, false);
+        await post('enhancement_approve', { token: preview.token, csrf: '' }, false);
+        await post('archive', { id: '100010' });
+        await post('enhancement_approve', { token: preview.token }, false);
+        await post('enhancement_create', enhancementFields(), false);
+        await post('restore', { id: '100010' });
+        await post('enhancement_cancel', { token: preview.token });
+        const huge = Buffer.from(texture);
+        huge.writeUInt32BE(4000,16); huge.writeUInt32BE(4000,20);
+        const oversized = await upload(100010,'add',0,huge);
+        await post('enhancement_create', { product_id:'100010', media_id:String(oversized.media_id) }, false);
+        await post('media_action', { product_id:'100010', op:'delete', media_id:String(oversized.media_id) });
+    });
+    await check('previews cannot be accessed or approved from another authenticated session', async () => {
+        const preview = await post('enhancement_create', enhancementFields());
+        const other = new PHPRequestHandler({ php, documentRoot:'/app', absoluteUrl:'http://lufly.test' });
+        await other.request({url:'/login.php',method:'POST',body:{password:'integration-test-only'}});
+        const page = await other.request({url:'/index.php'});
+        const token = page.text.match(/<meta name="csrf" content="([a-f0-9]+)"/)[1];
+        assert.equal((await other.request({url:'/index.php?action=enhancement_preview&token='+preview.token})).httpStatusCode,404);
+        const approved = await other.request({url:'/index.php?action=enhancement_approve',method:'POST',body:{csrf:token,token:preview.token}});
+        assert.equal(approved.httpStatusCode,400);
+        await post('enhancement_cancel', { token: preview.token });
+    });
+    await check('JPEG EXIF orientation and static WebP are supported; GIF and animated WebP are rejected', async () => {
+        await product(100012);
+        const jpeg = Buffer.from(await evaluate("$im=imagecreatetruecolor(40,32); ob_start(); imagejpeg($im); $bytes=ob_get_clean(); imagedestroy($im); echo json_encode(base64_encode($bytes));"), 'base64');
+        const exif = Buffer.from('ffe1002245786966000049492a0008000000010012010300010000000600000000000000','hex');
+        const oriented = Buffer.concat([jpeg.subarray(0,2), exif, jpeg.subarray(2)]);
+        const photo = await upload(100012,'add',0,oriented);
+        const preview = await post('enhancement_create',{product_id:'100012',media_id:String(photo.media_id)});
+        const output = await request('enhancement_preview&token='+preview.token);
+        const dimensions = await evaluate(`echo json_encode(array_slice(getimagesizefromstring(base64_decode('${Buffer.from(output.bytes).toString('base64')}')),0,2));`);
+        assert.deepEqual(dimensions,[32,40]);
+        await post('enhancement_cancel',{token:preview.token});
+        const webp = Buffer.from(await evaluate("$im=imagecreatetruecolor(40,32); ob_start(); imagewebp($im); $bytes=ob_get_clean(); imagedestroy($im); echo json_encode(base64_encode($bytes));"),'base64');
+        const still = await upload(100012,'add',0,webp);
+        const stillPreview = await post('enhancement_create',{product_id:'100012',media_id:String(still.media_id)});
+        await post('enhancement_cancel',{token:stillPreview.token});
+        const animated = Buffer.concat([webp,Buffer.from('ANIM'),Buffer.alloc(4)]);
+        animated.writeUInt32LE(animated.length-8,4);
+        const animation = await upload(100012,'add',0,animated);
+        await post('enhancement_create',{product_id:'100012',media_id:String(animation.media_id)},false);
+        const gif = await upload(100012,'add',0,Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7','base64'));
+        await post('enhancement_create',{product_id:'100012',media_id:String(gif.media_id)},false);
+        await post('delete',{id:'100012'});
+    });
+    await check('expired previews and excess previews are discarded without changing media', async () => {
+        const first = await post('enhancement_create', enhancementFields());
+        for (let i=0;i<3;i++) await post('enhancement_create', enhancementFields());
+        assert.equal((await request('enhancement_preview&token='+first.token)).httpStatusCode,404);
+        const preview = await post('enhancement_create', enhancementFields());
+        const before = await dbMedia();
+        php.writeFile('/app/expire-test.php', '<?php require "app.php"; foreach ($_SESSION["enhancements"] as &$preview) $preview["expires"]=time()-1;');
+        await server.request({url:'/expire-test.php'});
+        await post('enhancement_approve', {token:preview.token}, false);
+        assert.deepEqual(await dbMedia(), before);
+        assert.equal((await request('enhancement_preview&token='+preview.token)).httpStatusCode,404);
+    });
+    await check('browser enhancement comparison waits for approval, supports cancel and updates the card after saving', async () => {
+        const response = await request('group&prefix=TEST');
+        const errors = [], pending = [];
+        const virtualConsole = new VirtualConsole();
+        virtualConsole.on('jsdomError', error=>errors.push(error));
+        const dom = new JSDOM(response.text, {url:'http://lufly.test/index.php',runScripts:'dangerously',virtualConsole,
+            beforeParse(window) {
+                window.confirm=()=>true;
+                window.fetch=(url,options)=>{
+                    const response=server.request({url:'/index.php'+url,method:options.method,body:Object.fromEntries(options.body)});
+                    pending.push(response);
+                    return response.then(result=>({json:()=>Promise.resolve(result.json)}));
+                };
+            }
+        });
+        const win=dom.window, doc=win.document;
+        const settle=async()=>{
+            let count = -1;
+            while (count !== pending.length) {
+                count = pending.length;
+                await Promise.all(pending);
+                await new Promise(resolve=>setImmediate(resolve));
+            }
+        };
+        const trigger=doc.querySelector('.product-card[data-id="100010"] .lightbox-trigger');
+        const original=trigger.src;
+        trigger.click();
+        assert.match(doc.querySelector('.lb-enhance').textContent,/تحسين الصورة/);
+        win.enhanceImage();
+        await settle();
+        assert.equal(doc.getElementById('lbEnhancement').hidden,false);
+        assert.equal(doc.getElementById('enhanceApprove').disabled,true);
+        assert.equal(trigger.src,original);
+        win.cancelEnhancement();
+        await settle();
+        assert.equal(trigger.src,original);
+        assert.equal(doc.getElementById('lbEnhancement').hidden,true);
+        // Closing while generation is pending must discard the late result.
+        win.enhanceImage();
+        win.closeLightbox();
+        await settle();
+        assert.equal(doc.getElementById('lbEnhancement').hidden,true);
+        assert.equal(trigger.src,original);
+        trigger.click();
+        // A failed preview load must never enable the approval button.
+        win.enhanceImage();
+        await settle();
+        doc.getElementById('enhanceBefore').dispatchEvent(new win.Event('load'));
+        doc.getElementById('enhanceAfter').dispatchEvent(new win.Event('error'));
+        assert.equal(doc.getElementById('enhanceApprove').disabled,true);
+        win.cancelEnhancement();
+        await settle();
+        // A generation/network failure restores normal lightbox controls.
+        const fetch = win.fetch;
+        win.fetch = () => Promise.reject(new Error('Network unavailable'));
+        win.enhanceImage();
+        await settle();
+        assert.equal(doc.getElementById('lbEnhancement').hidden,true);
+        assert.equal(trigger.src,original);
+        win.fetch = fetch;
+        win.enhanceImage();
+        await settle();
+        doc.getElementById('enhanceBefore').dispatchEvent(new win.Event('load'));
+        doc.getElementById('enhanceAfter').dispatchEvent(new win.Event('load'));
+        assert.equal(doc.getElementById('enhanceApprove').disabled,false);
+        doc.getElementById('enhanceApprove').click();
+        await settle();
+        assert.notEqual(trigger.src,original);
+        assert.equal(doc.getElementById('lbImg').src,trigger.src);
+        assert.equal(doc.getElementById('lbEnhancement').hidden,true);
+        assert.equal(errors.length,0,errors.map(e=>e.message).join('\n'));
         dom.window.close();
     });
     await check('database connection failures render a setup error rather than crashing', async () => {
