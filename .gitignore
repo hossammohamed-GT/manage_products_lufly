@@ -11,6 +11,7 @@
 # Data
 /data/*.lock
 /data/*.sqlite*
+/data/local/
 
 # Google Drive
 /google_drive/

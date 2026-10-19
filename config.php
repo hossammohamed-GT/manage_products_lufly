@@ -43,7 +43,9 @@ foreach ($lines as $line) {
 }
 
 return [
-    'driver' => 'mysql',
+    'driver' => $env['DB_DRIVER'] ?? 'mysql',
+    'storage_mode' => $env['APP_STORAGE'] ?? 'auto',
+    'json_path' => __DIR__ . '/data/local/catalog.json.php',
     'host' => $env['DB_HOST'] ?? '127.0.0.1',
     'port' => (int)($env['DB_PORT'] ?? 3306),
     'database' => $env['DB_DATABASE'] ?? 'lufly_catalog',
@@ -51,5 +53,7 @@ return [
     'password' => $env['DB_PASSWORD'] ?? '',
     'sqlite_path' => __DIR__ . '/data/lufly.sqlite',
     'app_password' => $env['APP_PASSWORD'] ?? '',
+    // Absolute Python executable in a dedicated venv; blank leaves the local mode available.
+    'enhancement_python' => $env['ENHANCEMENT_PYTHON'] ?? '',
     'logo_path' => 'assets/logo.png',
 ];

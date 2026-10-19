@@ -52,11 +52,103 @@ function enhancementPreview(string $token): array
     return $preview;
 }
 
-function createEnhancement(PDO $db, int $productId, int $mediaId): array
+/** Stronger non-neural, luminance-only processing tuned for white catalog products. */
+function enhanceWhitewareLocal(GdImage $image): void
 {
+    $width = imagesx($image); $height = imagesy($image);
+    $fine = imagecreatetruecolor($width, $height);
+    $small = imagecreatetruecolor(max(1, (int)ceil($width / 16)), max(1, (int)ceil($height / 16)));
+    $broad = imagecreatetruecolor($width, $height);
+    $tones = [];
+    for ($i = 0; $i <= 255; $i++) $tones[$i] = -12 * pow(max(0, sin(M_PI * $i / 255)), 1.2);
+    try {
+        foreach ([$fine, $small, $broad] as $buffer) { imagealphablending($buffer, false); imagesavealpha($buffer, true); }
+        imagecopy($fine, $image, 0, 0, 0, 0, $width, $height);
+        imagefilter($fine, IMG_FILTER_GAUSSIAN_BLUR);
+        imagecopyresampled($small, $image, 0, 0, 0, 0, imagesx($small), imagesy($small), $width, $height);
+        imagecopyresampled($broad, $small, 0, 0, 0, 0, $width, $height, imagesx($small), imagesy($small));
+        for ($y = 0; $y < $height; $y++) {
+            for ($x = 0; $x < $width; $x++) {
+                $pixel = imagecolorat($image, $x, $y);
+                $alpha = ($pixel >> 24) & 127;
+                if ($alpha === 127) continue;
+                $r = ($pixel >> 16) & 255; $g = ($pixel >> 8) & 255; $b = $pixel & 255;
+                $luma = .2126 * $r + .7152 * $g + .0722 * $b;
+                if (min($r, $g, $b) >= 253) continue; // preserve clean white backgrounds
+                $near = imagecolorat($fine, $x, $y); $far = imagecolorat($broad, $x, $y);
+                $nearY = .2126 * (($near >> 16) & 255) + .7152 * (($near >> 8) & 255) + .0722 * ($near & 255);
+                $farY = .2126 * (($far >> 16) & 255) + .7152 * (($far >> 8) & 255) + .0722 * ($far & 255);
+                $detail = $luma - $nearY;
+                // Noise threshold + bounded sharpening avoids glowing/dark outlines.
+                $sharpen = abs($detail) > 1 ? max(-5, min(5, $detail)) : 0;
+                $local = max(-10, min(10, $luma - $farY));
+                $tone = $tones[(int)round($luma)];
+                $delta = ($tone + .85 * $local + $sharpen) * max(0, min(1, (253 - $luma) / 18));
+                $nr = max(0, min(255, (int)round($r + $delta)));
+                $ng = max(0, min(255, (int)round($g + $delta)));
+                $nb = max(0, min(255, (int)round($b + $delta)));
+                imagesetpixel($image, $x, $y, ($alpha << 24) | ($nr << 16) | ($ng << 8) | $nb);
+            }
+        }
+    } finally {
+        imagedestroy($fine); imagedestroy($small); imagedestroy($broad);
+    }
+}
+
+function enhancementAiConfigured(): bool
+{
+    global $config;
+    $python = $config['enhancement_python'] ?? '';
+    return is_string($python) && $python !== '' && is_file($python) && function_exists('proc_open');
+}
+
+/** Fixed worker + argument array: no shell interpolation and no user-supplied commands. */
+function runEnhancementAi(GdImage $image, string $target): void
+{
+    global $config;
+    if (!enhancementAiConfigured())
+        throw new RuntimeException('مسار AI يحتاج إعداد Python ومكتبات التحسين على السيرفر. استخدم وضع المنتجات البيضاء أو راجع دليل الإعداد.');
+    if (imagesx($image) * imagesy($image) > 1500000)
+        throw new RuntimeException('AI ×2 متاح حتى 1.5 ميجابكسل للصورة الأصلية. استخدم التحسين المحلي للصور الأكبر.');
+    $input = $target . '.input.png';
+    $process = null; $pipes = [];
+    try {
+        if (!@imagepng($image, $input, 3)) throw new RuntimeException('تعذر تجهيز الصورة للنموذج');
+        $command = [$config['enhancement_python'], dirname(__DIR__) . '/tools/image_enhancement/enhance.py', '--input', $input, '--output', $target];
+        $process = @proc_open($command, [0=>['pipe','r'], 1=>['pipe','w'], 2=>['pipe','w']], $pipes, dirname(__DIR__), null, ['bypass_shell'=>true]);
+        if (!is_resource($process)) throw new RuntimeException('تعذر تشغيل نموذج AI على السيرفر');
+        fclose($pipes[0]); unset($pipes[0]);
+        foreach ($pipes as $pipe) stream_set_blocking($pipe, false);
+        $started = microtime(true); $status = null;
+        do {
+            // Drain both streams so a worker error can never deadlock on a full pipe.
+            foreach ($pipes as $pipe) stream_get_contents($pipe);
+            $status = proc_get_status($process);
+            if (!$status['running']) break;
+            if (microtime(true) - $started > 30) {
+                proc_terminate($process, 9);
+                throw new RuntimeException('تجاوز AI مهلة 30 ثانية. جرّب صورة أصغر أو التحسين المحلي.');
+            }
+            usleep(50000);
+        } while (true);
+        if ($status['exitcode'] !== 0 || !is_file($target))
+            throw new RuntimeException('تعذر تشغيل AI. تأكد من تثبيت مكتبات Python ودعم OpenCV contrib كما في دليل الإعداد.');
+        $info = @getimagesize($target);
+        if (!$info || $info['mime'] !== 'image/png' || $info[0] !== imagesx($image) * 2 || $info[1] !== imagesy($image) * 2)
+            throw new RuntimeException('النموذج لم ينتج صورة صحيحة بالأبعاد المطلوبة');
+    } finally {
+        if (is_resource($process)) { foreach ($pipes as $pipe) if (is_resource($pipe)) fclose($pipe); proc_close($process); }
+        @unlink($input);
+    }
+}
+
+function createEnhancement(PDO|JsonCatalogStore $db, int $productId, int $mediaId, string $profile = 'whiteware'): array
+{
+    if (!in_array($profile, ['whiteware', 'ai'], true)) throw new RuntimeException('وضع تحسين غير صالح');
+    @set_time_limit(45);
     cleanupEnhancements();
     requireProduct($db, $productId);
-    $media = run($db, 'SELECT * FROM media WHERE id=? AND product_id=?', [$mediaId, $productId])->fetch();
+    $media = catalogRow($db, 'media', ['id'=>$mediaId,'product_id'=>$productId]);
     if (!$media || !(int)$media['previewable']) throw new RuntimeException('الصورة غير موجودة');
     if (!extension_loaded('gd')) throw new RuntimeException('تحسين الصور يحتاج تفعيل مكتبة GD في PHP على السيرفر.');
     $source = enhancementSource($media['path']);
@@ -70,7 +162,7 @@ function createEnhancement(PDO $db, int $productId, int $mediaId): array
     $unit = strtolower(substr($limit, -1));
     if (in_array($unit, ['k', 'm', 'g'], true)) $memoryLimit *= 1024 ** (strpos('kmg', $unit) + 1);
     if ($pixels > 6000000 || filesize($source) > 12 * 1024 * 1024 ||
-        ($memoryLimit > 0 && memory_get_usage(true) + $pixels * 16 + 32 * 1024 * 1024 > $memoryLimit))
+        ($memoryLimit > 0 && memory_get_usage(true) + $pixels * 24 + 32 * 1024 * 1024 > $memoryLimit))
         throw new RuntimeException('الصورة كبيرة جدًا للتحسين الآمن على السيرفر (الحد الأقصى 6 ميجابكسل و12 ميجابايت).');
     $bytes = @file_get_contents($source);
     if ($bytes === false) throw new RuntimeException('تعذر قراءة الصورة');
@@ -104,13 +196,15 @@ function createEnhancement(PDO $db, int $productId, int $mediaId): array
                 $image = $rotated;
             }
         }
-        // Gentle contrast and sharpening, never resizing or inventing product details.
-        if (!imagefilter($image, IMG_FILTER_CONTRAST, -3) ||
-            !imageconvolution($image, [[0, -0.1, 0], [-0.1, 1.4, -0.1], [0, -0.1, 0]], 1, 0))
-            throw new RuntimeException('تعذر تطبيق تحسين الصورة');
-        imagesavealpha($image, true);
-        if (@file_put_contents($original, $bytes) === false || !@imagepng($image, $enhanced, 6))
-            throw new RuntimeException('تعذر حفظ المعاينة');
+        $sourceWidth = imagesx($image); $sourceHeight = imagesy($image);
+        if ($profile === 'ai') {
+            runEnhancementAi($image, $enhanced);
+        } else {
+            enhanceWhitewareLocal($image);
+            imagesavealpha($image, true);
+            if (!@imagepng($image, $enhanced, 6)) throw new RuntimeException('تعذر حفظ المعاينة');
+        }
+        if (@file_put_contents($original, $bytes) === false) throw new RuntimeException('تعذر حفظ الصورة الأصلية للمعاينة');
         @chmod($original, 0600);
         @chmod($enhanced, 0600);
     } catch (Throwable $e) {
@@ -127,15 +221,19 @@ function createEnhancement(PDO $db, int $productId, int $mediaId): array
         'db_sha'=>$media['sha256'], 'source_sha'=>hash('sha256', $bytes),
         'original_file'=>$original, 'enhanced_file'=>$enhanced, 'mime'=>$info['mime'], 'expires'=>time() + 600,
     ];
-    return ['ok'=>true, 'token'=>$token,
+    $output = getimagesize($enhanced);
+    return ['ok'=>true, 'token'=>$token, 'profile'=>$profile,
+        'engine'=>$profile === 'ai' ? 'FSRCNN ×2 + Whiteware' : 'Whiteware Local',
+        'source_width'=>$sourceWidth, 'source_height'=>$sourceHeight, 'width'=>$output[0], 'height'=>$output[1],
+        'scale'=>$profile === 'ai' ? 2 : 1,
         'original_url'=>'?action=enhancement_preview&token=' . $token . '&original=1',
         'preview_url'=>'?action=enhancement_preview&token=' . $token];
 }
 
-function approveEnhancement(PDO $db, string $token): array
+function approveEnhancement(PDO|JsonCatalogStore $db, string $token): array
 {
     $preview = enhancementPreview($token);
-    $newPath = 'uploads/' . bin2hex(random_bytes(18)) . '.png';
+    $newPath = catalogUploadDirectory() . bin2hex(random_bytes(18)) . '.png';
     $target = dirname(__DIR__) . '/' . $newPath;
     try {
         $db->beginTransaction();
@@ -146,9 +244,9 @@ function approveEnhancement(PDO $db, string $token): array
             throw new RuntimeException('الصورة الأصلية اتغيرت. حدّث الصفحة وابدأ تحسينًا جديدًا.');
         if (!is_dir(dirname($target)) && !@mkdir(dirname($target), 0755, true)) throw new RuntimeException('تعذر إنشاء مجلد الصور');
         if (!@copy($preview['enhanced_file'], $target)) throw new RuntimeException('تعذر حفظ الصورة المحسنة');
-        $updated = run($db, 'UPDATE media SET path=?,sha256=? WHERE id=? AND product_id=? AND path=? AND sha256=?',
-            [$newPath, hash_file('sha256', $target), $preview['media_id'], $preview['product_id'], $preview['source_path'], $preview['db_sha']]);
-        if ($updated->rowCount() !== 1) throw new RuntimeException('الصورة اتغيرت أو اتحذفت أثناء المعاينة. حدّث الصفحة وحاول مرة أخرى.');
+        $updated = catalogUpdate($db, 'media', ['path'=>$newPath,'sha256'=>hash_file('sha256', $target)],
+            ['id'=>$preview['media_id'],'product_id'=>$preview['product_id'],'path'=>$preview['source_path'],'sha256'=>$preview['db_sha']]);
+        if ($updated !== 1) throw new RuntimeException('الصورة اتغيرت أو اتحذفت أثناء المعاينة. حدّث الصفحة وحاول مرة أخرى.');
         $db->commit();
     } catch (Throwable $e) {
         if ($db->inTransaction()) $db->rollBack();

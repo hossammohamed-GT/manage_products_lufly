@@ -29,7 +29,7 @@ try {
     $needsInstall = false;
     try {
         $testDb = db();
-        $testDb->query('SELECT COUNT(*) FROM products');
+        catalogRows($testDb, 'products', ['id'=>0]);
     } catch (Throwable $e) { $needsInstall = true; }
     if ($needsInstall) {
         try { install(); } catch (Throwable $e) {
@@ -60,7 +60,8 @@ try {
             checkCsrf();
             $token = is_string($_POST['token'] ?? null) ? $_POST['token'] : '';
             if ($action === 'enhancement_create') {
-                $result = createEnhancement(db(), (int)($_POST['product_id'] ?? 0), (int)($_POST['media_id'] ?? 0));
+                $result = createEnhancement(db(), (int)($_POST['product_id'] ?? 0), (int)($_POST['media_id'] ?? 0),
+                    is_string($_POST['profile'] ?? null) ? $_POST['profile'] : 'whiteware');
             } elseif ($action === 'enhancement_approve') {
                 $result = approveEnhancement(db(), $token);
             } else {
@@ -69,6 +70,7 @@ try {
             }
             echo json_encode($result);
         } catch (Throwable $e) {
+            if (isset($d) && $d->inTransaction()) $d->rollBack();
             http_response_code(400);
             echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
         }
@@ -83,12 +85,15 @@ try {
             $d = db();
             $id = (int)($_POST['id'] ?? 0);
             if (!$id) throw new RuntimeException('معرف المنتج مطلوب');
+            $d->beginTransaction();
             $product = requireProduct($d, $id);
             $current = (int)$product['verified'];
             $newVal = $current ? 0 : 1;
-            run($d, 'UPDATE products SET verified=?, version=version+1, updated_at=? WHERE id=?', [$newVal, date('c'), $id]);
+            catalogUpdate($d, 'products', ['verified'=>$newVal,'updated_at'=>date('c')], ['id'=>$id,'archived'=>0], true);
+            $d->commit();
             echo json_encode(['ok'=>true, 'verified'=>$newVal]);
         } catch (Throwable $e) {
+            if (isset($d) && $d->inTransaction()) $d->rollBack();
             http_response_code(400);
             echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
         }
@@ -105,11 +110,13 @@ try {
                 if (!is_int($id) || $id <= 0) throw new RuntimeException('معرف المنتج غير صالح');
             }
             $ids = array_values(array_unique($ids));
+            $d->beginTransaction();
             foreach ($ids as $id) requireProduct($d, $id);
-            $placeholders = implode(',', array_fill(0, count($ids), '?'));
-            $updated = run($d, "UPDATE products SET verified=1, version=version+1, updated_at=? WHERE archived=0 AND id IN ($placeholders)", array_merge([date('c')], $ids));
-            echo json_encode(['ok'=>true, 'count'=>$updated->rowCount()]);
+            $updated = catalogUpdate($d, 'products', ['verified'=>1,'updated_at'=>date('c')], ['archived'=>0,'id'=>$ids], true);
+            $d->commit();
+            echo json_encode(['ok'=>true, 'count'=>$updated]);
         } catch (Throwable $e) {
+            if (isset($d) && $d->inTransaction()) $d->rollBack();
             http_response_code(400);
             echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
         }
@@ -143,6 +150,7 @@ try {
             $html = ob_get_clean();
             echo json_encode(['ok'=>true, 'html'=>$html, 'count'=>count($filtered)]);
         } catch (Throwable $e) {
+            if (isset($d) && $d->inTransaction()) $d->rollBack();
             http_response_code(400);
             echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
         }
@@ -165,8 +173,8 @@ try {
                 if ($field === 'status' && !in_array($value, STATUSES, true)) throw new RuntimeException('حالة غير صالحة');
                 if (strlen($value) > (in_array($field, ['code', 'brand'], true) ? 190 : 60000)) throw new RuntimeException('النص طويل جداً');
                 $now = date('c');
-                $s = run($d, "UPDATE products SET $field=?, version=version+1, updated_at=? WHERE id=? AND archived=0", [$value, $now, $id]);
-                if ($s->rowCount() !== 1) throw new RuntimeException('المنتج غير موجود');
+                $changed = catalogUpdate($d, 'products', [$field=>$value,'updated_at'=>$now], ['id'=>$id,'archived'=>0], true);
+                if ($changed !== 1) throw new RuntimeException('المنتج غير موجود');
                 echo json_encode(['ok'=>true, 'field'=>$field, 'value'=>$value]);
             }
             else if ($action === 'media_action') {
@@ -175,6 +183,7 @@ try {
                     (string)($_POST['kind'] ?? 'photo')));
             }
         } catch (Throwable $e) {
+            if (isset($d) && $d->inTransaction()) $d->rollBack();
             http_response_code(400);
             echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
         }
@@ -191,11 +200,12 @@ try {
             if ($action === 'delete') {
                 deleteProductRecord($d, $id);
             } else {
-                run($d, 'UPDATE products SET archived=?,version=version+1,updated_at=? WHERE id=?',
-                    [$action === 'archive' ? 1 : 0, date('c'), $id]);
+                if (catalogUpdate($d, 'products', ['archived'=>$action === 'archive' ? 1 : 0,'updated_at'=>date('c')], ['id'=>$id], true) !== 1)
+                    throw new RuntimeException('المنتج غير موجود');
             }
             echo json_encode(['ok'=>true]);
         } catch (Throwable $e) {
+            if (isset($d) && $d->inTransaction()) $d->rollBack();
             http_response_code(400);
             echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
         }
@@ -771,6 +781,12 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .enhancement-compare figure { min-width: 0; }
 .enhancement-compare figcaption { padding: 8px; font-weight: bold; text-align: center; }
 .enhancement-compare img { width: 100%; height: min(48vh, 460px); object-fit: contain; background: #e6e9ec; border-radius: 10px; }
+.enhancement-profile { color: white; font-size: .8rem; display: grid; gap: 4px; }
+.enhancement-profile select { max-width: 260px; padding: 7px; border-radius: 7px; background: #fff; color: #18212b; }
+.enhancement-inspect { margin: 12px 0; font-size: .9rem; }
+.enhancement-viewport { overflow: auto; border-radius: 10px; background: #e6e9ec; }
+.enhancement-compare.actual-size .enhancement-viewport { height: min(48vh, 460px); }
+.enhancement-compare.actual-size img { width: auto; height: auto; max-width: none; display: block; }
 .enhancement-decisions { display: flex; gap: 12px; flex-wrap: wrap; }
 @media (max-width: 650px) {
     .enhancement-compare { grid-template-columns: 1fr; }
@@ -870,7 +886,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
                     <div class="hero-stat-label">منتج</div>
                 </div>
                 <div class="hero-stat">
-                    <div class="hero-stat-num"><?= (int)$d->query('SELECT COUNT(*) FROM media')->fetchColumn() ?></div>
+                    <div class="hero-stat-num"><?= count(catalogRows($d, 'media')) ?></div>
                     <div class="hero-stat-label">مرفق</div>
                 </div>
             </div>
@@ -884,6 +900,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 <div class="main-layout">
     <?= $sidebarHtml ?>
     <div class="main-content">
+        <?php if ($config['driver'] === 'json'): ?><div class="flash">وضع الملفات المحلي — التعديلات محفوظة في JSON مستقل، وليس في قاعدة البيانات.</div><?php endif; ?>
         <?php if ($flash): ?><div class="flash"><?= h($flash) ?></div><?php endif; ?>
         
         <!-- Bulk verify bar -->
@@ -1008,6 +1025,12 @@ function updateLightbox() {
     document.getElementById('lbImg').src = lbState.images[lbState.idx];
     document.getElementById('lbCounter').textContent = (lbState.idx + 1) + ' / ' + lbState.total;
     document.getElementById('lbActions').innerHTML = `
+        <label class="enhancement-profile">نوع التحسين
+            <select id="lbEnhanceProfile">
+                <option value="whiteware">منتجات بيضاء — تحسين قوي محلي</option>
+                <option value="ai" <?= enhancementAiConfigured() ? 'selected' : '' ?>>AI ×2 — <?= enhancementAiConfigured() ? 'مُعدّ على السيرفر' : 'يحتاج إعداد Python' ?></option>
+            </select>
+        </label>
         <button class="lightbox-action-btn lb-enhance" onclick="enhanceImage()"><i class="fas fa-wand-magic-sparkles"></i> تحسين الصورة</button>
         <button class="lightbox-action-btn lb-replace" onclick="triggerReplace()"><i class="fas fa-sync-alt"></i> استبدال</button>
         <button class="lightbox-action-btn lb-delete" onclick="deleteImage()"><i class="fas fa-trash"></i> حذف</button>
@@ -1168,12 +1191,13 @@ window.enhanceImage = function() {
     if (enhancementState) return;
     const mediaId = lbState.mediaIds[lbState.idx];
     if (!mediaId) { showToast('معرف الصورة غير متوفر', 'error'); return; }
-    const state = {productId: lbState.productId, mediaId, token: null, ready: false, saving: false};
+    const profile = document.getElementById('lbEnhanceProfile')?.value || 'whiteware';
+    const state = {productId: lbState.productId, mediaId, profile, token: null, ready: false, saving: false};
     enhancementState = state;
     enhancementMode(true);
     const panel = document.getElementById('lbEnhancement');
     panel.innerHTML = '<h2>تحسين الصورة</h2><p role="status">جاري تجهيز نسخة محسّنة للمقارنة… الصورة الأصلية لن تتغير قبل موافقتك.</p><button class="lightbox-action-btn" onclick="cancelEnhancement()">إلغاء والاحتفاظ بالأصل</button>';
-    enhancementRequest('create', {product_id: state.productId, media_id: state.mediaId})
+    enhancementRequest('create', {product_id: state.productId, media_id: state.mediaId, profile: state.profile})
     .then(data => {
         if (enhancementState !== state) {
             enhancementRequest('cancel', {token: data.token}).catch(() => {});
@@ -1182,16 +1206,22 @@ window.enhanceImage = function() {
         state.token = data.token;
         panel.innerHTML = `
             <h2>هل الصورة المحسّنة أفضل؟</h2>
-            <p>تحسين خفيف للحدة والتباين، بدون تكبير أو توليد تفاصيل جديدة. قارن ثم اختَر.</p>
+            <p id="enhancementDescription"></p>
+            <div class="enhancement-inspect"><label><input id="enhanceActualSize" type="checkbox" onchange="toggleEnhancementDetail(this.checked)"> فحص التفاصيل بالحجم الفعلي (100٪) — اسحب لرؤية باقي الصورة</label></div>
             <div class="enhancement-compare">
-                <figure><figcaption>قبل — الصورة الأصلية</figcaption><img id="enhanceBefore" alt="الصورة الأصلية قبل التحسين"></figure>
-                <figure><figcaption>بعد — الصورة المحسّنة</figcaption><img id="enhanceAfter" alt="معاينة الصورة المحسّنة"></figure>
+                <figure><figcaption>قبل — الصورة الأصلية</figcaption><div class="enhancement-viewport"><img id="enhanceBefore" alt="الصورة الأصلية قبل التحسين"></div></figure>
+                <figure><figcaption>بعد — الصورة المحسّنة</figcaption><div class="enhancement-viewport"><img id="enhanceAfter" alt="معاينة الصورة المحسّنة"></div></figure>
             </div>
             <p id="enhancementStatus" role="status">جاري تحميل المعاينة…</p>
             <div class="enhancement-decisions">
                 <button id="enhanceApprove" class="lightbox-action-btn lb-enhance" disabled onclick="approveImageEnhancement()">✓ اعتماد التحسين واستبدال الصورة</button>
                 <button id="enhanceCancel" class="lightbox-action-btn" onclick="cancelEnhancement()">إلغاء والاحتفاظ بالأصل</button>
             </div>`;
+        const description = document.getElementById('enhancementDescription');
+        const dimensions = `الأصل ${data.source_width}×${data.source_height} · النتيجة ${data.width}×${data.height}`;
+        description.textContent = data.profile === 'ai'
+            ? `نموذج FSRCNN العصبي ×2 مع معالجة للمنتجات البيضاء. ${dimensions}. راجع الحواف والتفاصيل؛ التكبير ليس ضمانًا لاسترجاع المفقود.`
+            : `تباين موضعي وإبراز الحواف والظلال مع حماية اللون الأبيض. ${dimensions}. معالجة محلية وليست AI؛ الأبعاد لم تتغير.`;
         let loaded = 0;
         ['enhanceBefore', 'enhanceAfter'].forEach((id, index) => {
             const image = document.getElementById(id);
@@ -1219,6 +1249,10 @@ window.enhanceImage = function() {
         cancelEnhancement();
         showToast(error.message || 'خطأ في الاتصال', 'error');
     });
+};
+
+window.toggleEnhancementDetail = function(actual) {
+    document.querySelector('.enhancement-compare')?.classList.toggle('actual-size', actual);
 };
 
 window.approveImageEnhancement = function() {
@@ -1671,21 +1705,28 @@ function showError(string $message): void {
 }
 
 function showSetupError(string $message): void {
+    global $config;
+    $fileMode = $config['driver'] === 'json';
     ob_start();
     ?>
     <div class="error-box">
-        <h3><i class="fas fa-exclamation-triangle"></i> تعذر الاتصال بقاعدة البيانات</h3>
+        <h3><i class="fas fa-exclamation-triangle"></i> <?= $fileMode ? 'تعذر فتح البيانات المحلية' : 'تعذر الاتصال بقاعدة البيانات' ?></h3>
         <p style="margin:12px 0;"><?= h($message) ?></p>
         <div style="text-align:right;margin-top:20px;padding:16px;background:rgba(0,0,0,0.05);border-radius:8px;">
             <h4 style="margin-bottom:10px;">خطوات الحل:</h4>
             <ol style="padding-right:20px;line-height:2;">
+                <?php if ($fileMode): ?>
+                <li>راجع صلاحيات الكتابة في data/local.</li>
+                <li>لو ملف JSON تالف، احتفظ به وراجع النسخة الاحتياطية قبل أي استرجاع.</li>
+                <?php else: ?>
                 <li>افتح <strong>XAMPP Control Panel</strong></li>
                 <li>تأكد إن <strong>MySQL شغال</strong> (لو مش شغال اضغط Start)</li>
                 <li>بعد ما MySQL يشتغل، حدّث الصفحة (F5)</li>
+                <?php endif; ?>
             </ol>
         </div>
         <div style="margin-top:20px;">
-            <a href="setup.php" class="btn btn-primary" style="margin:4px;"><i class="fas fa-stethoscope"></i> فحص النظام</a>
+            <?php if (!$fileMode): ?><a href="setup.php" class="btn btn-primary" style="margin:4px;"><i class="fas fa-stethoscope"></i> فحص النظام</a><?php endif; ?>
             <a href="?action=home" class="btn btn-outline" style="margin:4px;"><i class="fas fa-sync"></i> تحديث</a>
         </div>
     </div>
