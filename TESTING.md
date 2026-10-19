@@ -61,6 +61,20 @@ LUFLY_TEST_MODULES=/tmp/lufly-tests/node_modules LUFLY_TEST_PYTHON=/absolute/pat
 
 اختبار الجسر الاختياري يشغّل PHP `proc_open` عبر محوّل عمليات WASM، ويمرر الصورة إلى Python الحقيقي ويعيد PNG للتحقق والمعاينة والاعتماد، ويختبر فشل العملية أيضًا. هذا ليس بديلًا عن فحص صلاحيات عمليات Apache الأصلية. تختبر الواجهة أيضًا وضع الفحص 100٪، ويُختبر المحلي لحماية الأبيض ورفض طلب AI غير المُعدّ بدل التظاهر بتشغيل نموذج.
 
+### اختبارات High Resolution ×4
+
+بعد تنزيل الموديل بالأداة الموثقة، أضف مساره للاختبارات:
+
+```bash
+LUFLY_TEST_X4_MODEL=/absolute/path/EDSR_x4.pb /path/to/venv/bin/python -W error::ResourceWarning -m unittest discover -s tests -p 'test_*.py'
+LUFLY_TEST_MODULES=/tmp/lufly-tests/node_modules LUFLY_TEST_PYTHON=/path/to/venv/bin/python LUFLY_TEST_X4_MODEL=/absolute/path/EDSR_x4.pb node tests/test_app_integration.cjs
+LUFLY_TEST_MODULES=/tmp/lufly-tests/node_modules LUFLY_TEST_PYTHON=/path/to/venv/bin/python LUFLY_TEST_X4_MODEL=/absolute/path/EDSR_x4.pb node tests/test_json_storage.cjs
+```
+
+مع المكتبات والموديل: **18 اختبار Python، 35 مجموعة SQL و17 مجموعة JSON**. توجد أيضًا 4 اختبارات منفصلة لأداة حفظ الإعدادات: `LUFLY_TEST_MODULES=/tmp/lufly-tests/node_modules node tests/test_image_setup.cjs`، تحاكي CLI داخل WASM بتجاوز بوابة SAPI في نسخة ذاكرة فقط وتعريف STDERR؛ تتحقق من النسخة الاحتياطية وحفظ الإعدادات ورفض المسارات/الأوزان غير الصالحة وتنظيف فشل rename، ومنع تشغيل الأداة الأصلية عبر HTTP. تتضمن أوزان EDSR الحقيقية، التفريق عن bicubic، halos عبر حدود البلاطات، إخراج 4× وPNG والشفافية والأبيض، عدم تعديل الأصل، رفض الأوزان الناقصة/التالفة أو scale غير صحيح، وتنزيل الملف الكامل ثم الإلغاء/الاعتماد بدون إعادة ضغط. تنزيل الموديل يُختبر ببيانات وهمية مع حقن opener فقط: نجاح التحقق، إعادة استخدام الكاش، رفض انقطاع/زيادة/فساد التنزيل، الاحتفاظ بالملف السابق وتنظيف المؤقتات. لا تنزّل الاختبارات نفسها موديلًا أو تتصل بالإنترنت.
+
+بدون مسار الموديل تُتخطّى اختبارات EDSR العصبية صراحةً؛ اختبارات أمان التنزيل تعمل بالـstdlib. لتجربة PHP 8.1 أضف `LUFLY_TEST_PHP_VERSION=8.1`. سكربت إعداد PowerShell وصلاحيات Windows/Apache الفعلية غير متحقق منها على هذه البيئة Linux/WASM.
+
 ### اختبارات وضع الملفات المحلي (بدون قاعدة بيانات)
 
 ```bash

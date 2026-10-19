@@ -20,3 +20,6 @@
 __pycache__/
 *.py[cod]
 .venv/
+
+# Optional high-resolution model is installed separately, not committed.
+/tools/image_enhancement/models/EDSR_x4.pb

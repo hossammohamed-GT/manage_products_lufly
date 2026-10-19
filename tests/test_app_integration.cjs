@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const modules = process.env.LUFLY_TEST_MODULES;
 const dependency = name => require(modules ? path.join(modules, name) : name);
-const { PHP, PHPRequestHandler } = dependency('@php-wasm/universal');
+const { PHP, PHPRequestHandler, setPhpIniEntries } = dependency('@php-wasm/universal');
 const { loadNodeRuntime } = dependency('@php-wasm/node');
 const { JSDOM, VirtualConsole } = dependency('jsdom');
 const root = path.resolve(__dirname, '..');
@@ -55,12 +55,14 @@ async function main() {
         processId: 1,
         locateFile: file => path.isAbsolute(file) ? file : path.join(wasmRoot, 'asyncify', file),
     } }));
+    await setPhpIniEntries(php, {error_log:'/tmp/lufly-test-errors.log'});
     php.mkdir('/app/includes');
+    php.mkdir('/app/tools/image_enhancement');
     php.mkdir('/app/tools');
     php.mkdir('/app/data');
     php.mkdir('/app/uploads');
     php.mkdir('/app/assets/catalog');
-    for (const file of ['app.php', 'config.php', 'index.php', 'login.php', 'tools/export_local_json.php', 'includes/sidebar.php', 'includes/catalog_storage.php', 'includes/image_enhancement.php', 'data/catalog.json', '.env.example']) {
+    for (const file of ['app.php', 'config.php', 'index.php', 'login.php', 'tools/export_local_json.php', 'tools/image_enhancement/setup_config.php', 'includes/sidebar.php', 'includes/catalog_storage.php', 'includes/image_enhancement.php', 'data/catalog.json', '.env.example']) {
         php.writeFile('/app/' + file, fs.readFileSync(path.join(root, file)));
     }
     php.writeFile('/app/config.local.php', `<?php return ['storage_mode'=>'database','driver'=>'sqlite','sqlite_path'=>'/app/data/test.sqlite','app_password'=>'integration-test-only'];`);
@@ -84,7 +86,7 @@ async function main() {
         assert.equal(await evaluate("echo json_encode((int)$d->query('SELECT COUNT(*) FROM products')->fetchColumn());"), 715);
     });
     await check('all PHP entry files pass syntax parsing', async () => {
-        for (const file of ['app.php', 'config.php', 'index.php', 'login.php', 'tools/export_local_json.php', 'includes/sidebar.php', 'includes/catalog_storage.php', 'includes/image_enhancement.php']) {
+        for (const file of ['app.php', 'config.php', 'index.php', 'login.php', 'tools/export_local_json.php', 'tools/image_enhancement/setup_config.php', 'includes/sidebar.php', 'includes/catalog_storage.php', 'includes/image_enhancement.php']) {
             const code = Buffer.from(fs.readFileSync(path.join(root, file))).toString('base64');
             await evaluate(`token_get_all(base64_decode('${code}'), TOKEN_PARSE);`);
         }
@@ -324,6 +326,7 @@ async function main() {
         await post('enhancement_create', {...enhancementFields(), profile:'invalid'}, false);
         const unavailable = await post('enhancement_create', {...enhancementFields(), profile:'ai'}, false);
         assert.match(unavailable.error,/Python/);
+        await post('enhancement_create', {...enhancementFields(), profile:'ai4'}, false);
         const before = await dbMedia();
         const preview = await post('enhancement_create', {...enhancementFields(), profile:'whiteware'});
         assert.equal(preview.engine,'Whiteware Local');
@@ -337,41 +340,16 @@ async function main() {
         assert.equal(whites[1],whites[2]);assert.equal(whites[2],whites[3]);
     });
     if (process.env.LUFLY_TEST_PYTHON) await check('PHP worker bridge runs real neural inference, previews and approves a 2x result', async () => {
-        const {spawn}=require('node:child_process');
-        const {EventEmitter}=require('node:events');
-        const os=require('node:os');
-        const python=process.env.LUFLY_TEST_PYTHON;
-        assert.ok(fs.existsSync(python));
-        php.writeFile('/test-python','test handler maps this to the real, explicitly configured interpreter');
+        const state=await require('./ai_bridge.cjs')(php);
         const config=php.readFileAsText('/app/config.local.php');
         php.writeFile('/app/config.local.php',config.replace("'driver'=>'sqlite'","'enhancement_python'=>'/test-python','driver'=>'sqlite'"));
-        let runs=0; let failWorker=false;
-        await php.setSpawnHandler((command,args)=>{
-            assert.equal(command,'/test-python');
-            assert.equal(args[0],'/app/tools/image_enhancement/enhance.py');
-            const input=args[args.indexOf('--input')+1], output=args[args.indexOf('--output')+1];
-            const temp=fs.mkdtempSync(path.join(os.tmpdir(),'lufly-ai-bridge-'));
-            const source=path.join(temp,'input.png'), target=path.join(temp,'output.png');
-            fs.writeFileSync(source,php.readFileAsBuffer(input));
-            const child=spawn(python,failWorker ? ['-c','raise SystemExit(1)'] : [path.join(root,'tools/image_enhancement/enhance.py'),'--input',source,'--output',target]);
-            const bridge=new EventEmitter();
-            bridge.stdout=child.stdout;bridge.stderr=child.stderr;bridge.stdin=child.stdin;bridge.pid=child.pid;
-            bridge.kill=(...args)=>child.kill(...args);
-            child.on('spawn',()=>bridge.emit('spawn'));
-            child.on('error',error=>bridge.emit('error',error));
-            child.on('close',code=>{
-                if (code===0) php.writeFile(output,fs.readFileSync(target));
-                fs.rmSync(temp,{recursive:true,force:true});
-                bridge.emit('exit',code);
-            });
-            runs++;return bridge;
-        });
         try {
             const before=await dbMedia();
-            failWorker=true;
+            state.fail=true;
             await post('enhancement_create',{...enhancementFields(),profile:'ai'},false);
             assert.deepEqual(await dbMedia(),before);
-            failWorker=false;
+            assert.match(php.readFileAsText('/tmp/lufly-test-errors.log'),/LUFLY enhancement worker failed/);
+            state.fail=false;
             const preview=await post('enhancement_create',{...enhancementFields(),profile:'ai'});
             assert.equal(preview.engine,'FSRCNN ×2 + Whiteware');
             assert.equal(preview.width,80);assert.equal(preview.height,64);assert.equal(preview.scale,2);
@@ -379,7 +357,38 @@ async function main() {
             const output=await request('enhancement_preview&token='+preview.token);
             assert.equal(output.headers['content-type'][0],'image/png');
             enhancedMedia=await post('enhancement_approve',{token:preview.token});
-            assert.equal(runs,2);
+            assert.equal(state.runs,2);
+            if (process.env.LUFLY_TEST_X4_MODEL) await check('real EDSR x4 validates scale, downloads losslessly, cancels and approves without metadata loss',async()=>{
+                const fields={...enhancementFields(),profile:'ai4'};
+                const missing=await post('enhancement_create',fields,false);
+                assert.match(missing.error,/EDSR/);
+                php.writeFile('/app/config.local.php',config.replace("'driver'=>'sqlite'","'enhancement_python'=>'/test-python','enhancement_x4_model'=>'/test-x4-model','driver'=>'sqlite'"));
+                const original=await dbMedia();
+                assert.equal(await evaluate("$lock=enhancementDirectory().'/edsr-x4.lock';fclose(fopen($lock,'c'));touch($lock,time()-1200);cleanupEnhancements();echo json_encode(is_file($lock));"),true);
+                const paths=await evaluate("fclose(fopen(enhancementDirectory().'/edsr-x4.lock','c')); echo json_encode(glob(enhancementDirectory().'/*')); ");
+                state.wrongScale=true;
+                await post('enhancement_create',fields,false);
+                state.wrongScale=false;
+                assert.deepEqual(await dbMedia(),original);
+                assert.deepEqual(await evaluate("echo json_encode(glob(enhancementDirectory().'/*'));"),paths);
+                const preview=await post('enhancement_create',fields);
+                assert.equal(preview.profile,'ai4');assert.equal(preview.scale,4);
+                assert.equal(preview.width,320);assert.equal(preview.height,256);
+                assert.match(preview.engine,/EDSR/);
+                const download=await server.request({url:'/index.php'+preview.download_url});
+                assert.equal(download.httpStatusCode,200);
+                assert.match(download.headers['content-disposition'][0],/attachment/);
+                const pixels=await evaluate(`echo json_encode(array_slice(getimagesizefromstring(base64_decode('${Buffer.from(download.bytes).toString('base64')}')),0,2));`);
+                assert.deepEqual(pixels,[320,256]);
+                assert.deepEqual(await dbMedia(),original);
+                await post('enhancement_cancel',{token:preview.token});
+                assert.equal((await server.request({url:'/index.php'+preview.download_url})).httpStatusCode,404);
+                const second=await post('enhancement_create',fields);
+                enhancedMedia=await post('enhancement_approve',{token:second.token});
+                const after=await dbMedia();
+                for(const key of ['id','product_id','original_name','kind','caption','sort_order','previewable']) assert.equal(after[key],original[key]);
+                assert.deepEqual(await evaluate(`echo json_encode(array_slice(getimagesize(__DIR__.'/${enhancedMedia.path}'),0,2));`.replace("__DIR__", "'/app'")),[320,256]);
+            });
         } finally { php.writeFile('/app/config.local.php',config); }
     });
     await check('explicit enhancement approval replaces only the chosen image and preserves shared files and metadata', async () => {
@@ -520,6 +529,7 @@ async function main() {
         assert.equal(doc.getElementById('enhanceApprove').disabled,true);
         doc.getElementById('enhanceActualSize').click();
         assert.ok(doc.querySelector('.enhancement-compare').classList.contains('actual-size'));
+        assert.equal(doc.getElementById('enhanceDownload').hidden,true);
         assert.equal(trigger.src,original);
         win.cancelEnhancement();
         await settle();
@@ -553,6 +563,8 @@ async function main() {
         doc.getElementById('enhanceBefore').dispatchEvent(new win.Event('load'));
         doc.getElementById('enhanceAfter').dispatchEvent(new win.Event('load'));
         assert.equal(doc.getElementById('enhanceApprove').disabled,false);
+        assert.match(doc.getElementById('enhanceDownload').href,/download=1/);
+        assert.equal(doc.getElementById('enhanceDownload').hidden,false);
         doc.getElementById('enhanceApprove').click();
         await settle();
         assert.notEqual(trigger.src,original);

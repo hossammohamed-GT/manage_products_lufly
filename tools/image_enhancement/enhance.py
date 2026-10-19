@@ -1,7 +1,9 @@
-"""Private, offline FSRCNN x2 inference worker. No downloads or network calls."""
+"""Private, offline FSRCNN x2 / EDSR x4 inference worker. No downloads or network calls."""
 import argparse
 import hashlib
 import json
+import os
+import tempfile
 import sys
 from pathlib import Path
 
@@ -11,6 +13,11 @@ from PIL import Image, ImageOps
 
 MODEL = Path(__file__).with_name('models') / 'FSRCNN_x2.pb'
 MODEL_SHA256 = '366b33f0084c7b3f2bf6724f0a2c77bca94fcec9d7b6d72389d330073b380d5c'
+EDSR = json.loads((Path(__file__).with_name('models') / 'EDSR_x4.json').read_text(encoding='utf-8'))
+PROFILES = {
+    'ai': dict(network='fsrcnn', scale=2, model=MODEL, checksum=MODEL_SHA256, tile=192, halo=16),
+    'ai4': dict(network='edsr', scale=4, model=MODEL.with_name('EDSR_x4.pb'), checksum=EDSR['sha256'], tile=128, halo=40),
+}
 MAX_INPUT_PIXELS = 1_500_000
 
 
@@ -36,28 +43,41 @@ def whiteware_finish(rgb):
     return np.rint(result).astype(np.uint8)
 
 
-def upscale_tiled(rgb, model_path=MODEL, tile=192, halo=16):
-    if hashlib.sha256(Path(model_path).read_bytes()).hexdigest() != MODEL_SHA256:
+def upscale_tiled(rgb, model_path=None, tile=None, halo=None, profile='ai'):
+    options = PROFILES[profile]
+    model_path = Path(model_path) if model_path is not None else options['model']
+    if not model_path.is_file():
+        raise ValueError('EDSR x4 model missing; run the model installer' if profile == 'ai4' else 'FSRCNN model missing')
+    if hashlib.sha256(model_path.read_bytes()).hexdigest() != options['checksum']:
         raise ValueError('Model checksum mismatch')
+    tile = options['tile'] if tile is None else tile
+    halo = options['halo'] if halo is None else halo
+    if tile < 1 or halo < 0:
+        raise ValueError('Invalid tile/halo')
+    scale = options['scale']
     cv2.setNumThreads(2)
     network = cv2.dnn_superres.DnnSuperResImpl_create()
     network.readModel(str(model_path))
-    network.setModel('fsrcnn', 2)
+    network.setModel(options['network'], scale)
     h, w = rgb.shape[:2]
-    output = np.empty((h * 2, w * 2, 3), np.uint8)
-    # Overlap/crop avoids seams; no full-image neural activation tensors in memory.
+    output = np.empty((h * scale, w * scale, 3), np.uint8)
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    # EDSR has a much deeper receptive field: 40 input-pixel halos, not FSRCNN's 16.
     for y in range(0, h, tile):
         for x in range(0, w, tile):
             top, left = max(0, y - halo), max(0, x - halo)
             bottom, right = min(h, y + tile + halo), min(w, x + tile + halo)
             patch = network.upsample(bgr[top:bottom, left:right])
             ph, pw = min(tile, h - y), min(tile, w - x)
-            output[y * 2:(y + ph) * 2, x * 2:(x + pw) * 2] = patch[(y - top) * 2:(y - top + ph) * 2, (x - left) * 2:(x - left + pw) * 2]
+            output[y * scale:(y + ph) * scale, x * scale:(x + pw) * scale] = patch[(y - top) * scale:(y - top + ph) * scale, (x - left) * scale:(x - left + pw) * scale]
     return cv2.cvtColor(output, cv2.COLOR_BGR2RGB)
 
 
-def enhance(source, target):
+def enhance(source, target, profile='ai', model_path=None):
+    if Path(source).resolve() == Path(target).resolve():
+        raise ValueError('Input and output must be different files')
+    options = PROFILES[profile]
+    scale = options['scale']
     with Image.open(source) as image:
         if image.width * image.height > MAX_INPUT_PIXELS:
             raise ValueError('AI input exceeds 1.5 megapixels; use the local profile')
@@ -68,29 +88,40 @@ def enhance(source, target):
     background = Image.new('RGB', rgba.size, 'white')
     background.paste(rgba, mask=rgba.getchannel('A'))
     rgb = np.array(background)
-    neural = upscale_tiled(rgb)
-    bicubic = cv2.resize(rgb, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    blended = np.rint(.8 * neural.astype(np.float32) + .2 * bicubic).clip(0, 255).astype(np.uint8)
+    neural = upscale_tiled(rgb, profile=profile, model_path=model_path)
+    bicubic = cv2.resize(rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    blended = neural if profile == 'ai4' else np.rint(.8 * neural.astype(np.float32) + .2 * bicubic).clip(0, 255).astype(np.uint8)
     white = np.all(bicubic >= 253, axis=2)
     blended[white] = bicubic[white]
-    result = Image.fromarray(whiteware_finish(blended))
+    # Keep x4 learned detail/color; no bicubic dilution, tone darkening or aggressive unsharp pass.
+    result = Image.fromarray(blended if profile == 'ai4' else whiteware_finish(blended))
     if rgba.getextrema()[3][0] != 255:
         result.putalpha(rgba.getchannel('A').resize(result.size, Image.Resampling.LANCZOS))
-    result.save(target, format='PNG', compress_level=6)
-    return {'engine': 'FSRCNN ×2 + Whiteware', 'width': result.width, 'height': result.height, 'scale': 2}
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=Path(target).parent, prefix='.enhanced-', suffix='.png', delete=False) as file:
+            temporary = Path(file.name)
+        result.save(temporary, format='PNG', compress_level=6)
+        os.replace(temporary, target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return {'engine': 'EDSR ×4 — High Resolution' if profile == 'ai4' else 'FSRCNN ×2 + Whiteware',
+            'width': result.width, 'height': result.height, 'scale': scale}
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--profile', choices=PROFILES, default='ai')
+    parser.add_argument('--model-path', type=Path, help='Trusted administrator-configured model path')
     args = parser.parse_args()
     try:
-        print(json.dumps(enhance(args.input, args.output)))
+        print(json.dumps(enhance(args.input, args.output, args.profile, args.model_path)))
     except Exception as error:
         # No traceback or filesystem details in the HTTP response; stderr is for operators.
         print(str(error), file=sys.stderr)
-        args.output.unlink(missing_ok=True)
         return 1
     return 0
 

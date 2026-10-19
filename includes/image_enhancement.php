@@ -27,7 +27,7 @@ function cleanupEnhancements(): void
     // Also collect abandoned previews whose browser/session never came back.
     $directory = enhancementDirectory();
     foreach (glob($directory . '/*') ?: [] as $file) {
-        if (is_file($file) && filemtime($file) < time() - 600) @unlink($file);
+        if (!str_ends_with($file, '.lock') && is_file($file) && filemtime($file) < time() - 600) @unlink($file);
     }
 }
 
@@ -95,57 +95,80 @@ function enhanceWhitewareLocal(GdImage $image): void
     }
 }
 
-function enhancementAiConfigured(): bool
+function enhancementProfile(string $profile): array
+{
+    return match ($profile) {
+        'whiteware' => ['scale'=>1, 'engine'=>'Whiteware Local', 'timeout'=>45],
+        'ai' => ['scale'=>2, 'engine'=>'FSRCNN ×2 + Whiteware', 'timeout'=>30],
+        'ai4' => ['scale'=>4, 'engine'=>'EDSR ×4 — High Resolution', 'timeout'=>600],
+        default => throw new RuntimeException('وضع تحسين غير صالح'),
+    };
+}
+
+function enhancementAiConfigured(string $profile = 'ai'): bool
 {
     global $config;
     $python = $config['enhancement_python'] ?? '';
-    return is_string($python) && $python !== '' && is_file($python) && function_exists('proc_open');
+    return is_string($python) && $python !== '' && is_file($python) && function_exists('proc_open')
+        && ($profile !== 'ai4' || is_file($config['enhancement_x4_model'] ?? ''));
 }
 
 /** Fixed worker + argument array: no shell interpolation and no user-supplied commands. */
-function runEnhancementAi(GdImage $image, string $target): void
+function runEnhancementAi(GdImage $image, string $target, string $profile = 'ai'): void
 {
     global $config;
+    $options = enhancementProfile($profile);
     if (!enhancementAiConfigured())
         throw new RuntimeException('مسار AI يحتاج إعداد Python ومكتبات التحسين على السيرفر. استخدم وضع المنتجات البيضاء أو راجع دليل الإعداد.');
+    if ($profile === 'ai4' && !enhancementAiConfigured('ai4'))
+        throw new RuntimeException('موديل EDSR ×4 غير مثبت. شغّل tools/image_enhancement/setup_windows.ps1 على XAMPP لإعداد High Resolution.');
     if (imagesx($image) * imagesy($image) > 1500000)
-        throw new RuntimeException('AI ×2 متاح حتى 1.5 ميجابكسل للصورة الأصلية. استخدم التحسين المحلي للصور الأكبر.');
+        throw new RuntimeException('مسار AI متاح حتى 1.5 ميجابكسل للصورة الأصلية لحماية الذاكرة. استخدم الصورة الأصلية وليس نسخة مكبّرة مسبقًا.');
     $input = $target . '.input.png';
-    $process = null; $pipes = [];
+    $process = null; $pipes = []; $workerLock = null;
     try {
+        if ($profile === 'ai4') {
+            $workerLock = @fopen(enhancementDirectory() . '/edsr-x4.lock', 'c');
+            if (!$workerLock || !flock($workerLock, LOCK_EX | LOCK_NB))
+                throw new RuntimeException('نموذج High Resolution يعالج صورة أخرى الآن. انتظر حتى ينتهي وحاول مرة أخرى.');
+        }
         if (!@imagepng($image, $input, 3)) throw new RuntimeException('تعذر تجهيز الصورة للنموذج');
-        $command = [$config['enhancement_python'], dirname(__DIR__) . '/tools/image_enhancement/enhance.py', '--input', $input, '--output', $target];
+        $command = [$config['enhancement_python'], dirname(__DIR__) . '/tools/image_enhancement/enhance.py', '--input', $input, '--output', $target, '--profile', $profile];
+        if ($profile === 'ai4') { $command[] = '--model-path'; $command[] = $config['enhancement_x4_model']; }
         $process = @proc_open($command, [0=>['pipe','r'], 1=>['pipe','w'], 2=>['pipe','w']], $pipes, dirname(__DIR__), null, ['bypass_shell'=>true]);
         if (!is_resource($process)) throw new RuntimeException('تعذر تشغيل نموذج AI على السيرفر');
         fclose($pipes[0]); unset($pipes[0]);
         foreach ($pipes as $pipe) stream_set_blocking($pipe, false);
-        $started = microtime(true); $status = null;
+        $started = microtime(true); $status = null; $diagnostic = '';
         do {
             // Drain both streams so a worker error can never deadlock on a full pipe.
-            foreach ($pipes as $pipe) stream_get_contents($pipe);
+            foreach ($pipes as $pipe) $diagnostic = substr($diagnostic . stream_get_contents($pipe), -4096);
             $status = proc_get_status($process);
             if (!$status['running']) break;
-            if (microtime(true) - $started > 30) {
+            if (microtime(true) - $started > $options['timeout']) {
                 proc_terminate($process, 9);
-                throw new RuntimeException('تجاوز AI مهلة 30 ثانية. جرّب صورة أصغر أو التحسين المحلي.');
+                throw new RuntimeException('تجاوز AI مهلة ' . $options['timeout'] . ' ثانية. جرّب صورة أصغر أو التحسين المحلي.');
             }
             usleep(50000);
         } while (true);
-        if ($status['exitcode'] !== 0 || !is_file($target))
-            throw new RuntimeException('تعذر تشغيل AI. تأكد من تثبيت مكتبات Python ودعم OpenCV contrib كما في دليل الإعداد.');
+        if ($status['exitcode'] !== 0 || !is_file($target)) {
+            error_log('LUFLY enhancement worker failed: ' . $diagnostic);
+            throw new RuntimeException('تعذر تشغيل AI. تأكد من مكتبات Python وصحة ملف الموديل والذاكرة المتاحة؛ التفاصيل في سجل أخطاء PHP.');
+        }
         $info = @getimagesize($target);
-        if (!$info || $info['mime'] !== 'image/png' || $info[0] !== imagesx($image) * 2 || $info[1] !== imagesy($image) * 2)
+        if (!$info || $info['mime'] !== 'image/png' || $info[0] !== imagesx($image) * $options['scale'] || $info[1] !== imagesy($image) * $options['scale'])
             throw new RuntimeException('النموذج لم ينتج صورة صحيحة بالأبعاد المطلوبة');
     } finally {
         if (is_resource($process)) { foreach ($pipes as $pipe) if (is_resource($pipe)) fclose($pipe); proc_close($process); }
         @unlink($input);
+        if (is_resource($workerLock)) { flock($workerLock, LOCK_UN); fclose($workerLock); }
     }
 }
 
 function createEnhancement(PDO|JsonCatalogStore $db, int $productId, int $mediaId, string $profile = 'whiteware'): array
 {
-    if (!in_array($profile, ['whiteware', 'ai'], true)) throw new RuntimeException('وضع تحسين غير صالح');
-    @set_time_limit(45);
+    $options = enhancementProfile($profile);
+    @set_time_limit($options['timeout'] + 20);
     cleanupEnhancements();
     requireProduct($db, $productId);
     $media = catalogRow($db, 'media', ['id'=>$mediaId,'product_id'=>$productId]);
@@ -197,8 +220,8 @@ function createEnhancement(PDO|JsonCatalogStore $db, int $productId, int $mediaI
             }
         }
         $sourceWidth = imagesx($image); $sourceHeight = imagesy($image);
-        if ($profile === 'ai') {
-            runEnhancementAi($image, $enhanced);
+        if ($profile !== 'whiteware') {
+            runEnhancementAi($image, $enhanced, $profile);
         } else {
             enhanceWhitewareLocal($image);
             imagesavealpha($image, true);
@@ -223,9 +246,10 @@ function createEnhancement(PDO|JsonCatalogStore $db, int $productId, int $mediaI
     ];
     $output = getimagesize($enhanced);
     return ['ok'=>true, 'token'=>$token, 'profile'=>$profile,
-        'engine'=>$profile === 'ai' ? 'FSRCNN ×2 + Whiteware' : 'Whiteware Local',
+        'engine'=>$options['engine'],
         'source_width'=>$sourceWidth, 'source_height'=>$sourceHeight, 'width'=>$output[0], 'height'=>$output[1],
-        'scale'=>$profile === 'ai' ? 2 : 1,
+        'scale'=>$options['scale'],
+        'download_url'=>'?action=enhancement_preview&token=' . $token . '&download=1',
         'original_url'=>'?action=enhancement_preview&token=' . $token . '&original=1',
         'preview_url'=>'?action=enhancement_preview&token=' . $token];
 }

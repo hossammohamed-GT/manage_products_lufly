@@ -55,5 +55,6 @@ return [
     'app_password' => $env['APP_PASSWORD'] ?? '',
     // Absolute Python executable in a dedicated venv; blank leaves the local mode available.
     'enhancement_python' => $env['ENHANCEMENT_PYTHON'] ?? '',
+    'enhancement_x4_model' => ($env['ENHANCEMENT_X4_MODEL'] ?? '') ?: __DIR__ . '/tools/image_enhancement/models/EDSR_x4.pb',
     'logo_path' => 'assets/logo.png',
 ];

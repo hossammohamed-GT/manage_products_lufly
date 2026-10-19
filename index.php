@@ -44,6 +44,8 @@ try {
             $original = ($_GET['original'] ?? '') === '1';
             header('Content-Type: ' . ($original ? $preview['mime'] : 'image/png'));
             header('Cache-Control: private, no-store');
+            if (!$original && ($_GET['download'] ?? '') === '1')
+                header('Content-Disposition: attachment; filename="lufly-high-resolution.png"');
             readfile($original ? $preview['original_file'] : $preview['enhanced_file']);
         } catch (Throwable $e) {
             http_response_code(404);
@@ -771,6 +773,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     font-family: inherit;
 }
 .lb-enhance { background: #e2f7ef; color: #116348; }
+.lightbox-action-btn[hidden] { display: none; }
 .lightbox-action-btn:disabled { opacity: .55; cursor: wait; }
 .lightbox-actions { max-width: 95vw; flex-wrap: wrap; justify-content: center; }
 .enhancement-panel { width: min(1080px, 90vw); max-height: calc(100dvh - 110px); overflow-y: auto; color: white; padding: 24px; background: #18212b; border: 1px solid #43505e; border-radius: 16px; }
@@ -1028,7 +1031,8 @@ function updateLightbox() {
         <label class="enhancement-profile">نوع التحسين
             <select id="lbEnhanceProfile">
                 <option value="whiteware">منتجات بيضاء — تحسين قوي محلي</option>
-                <option value="ai" <?= enhancementAiConfigured() ? 'selected' : '' ?>>AI ×2 — <?= enhancementAiConfigured() ? 'مُعدّ على السيرفر' : 'يحتاج إعداد Python' ?></option>
+                <option value="ai4" <?= enhancementAiConfigured('ai4') ? 'selected' : '' ?>>High Resolution ×4 — EDSR <?= enhancementAiConfigured('ai4') ? '(جاهز)' : '(يحتاج تنزيل الموديل)' ?></option>
+                <option value="ai" <?= enhancementAiConfigured() && !enhancementAiConfigured('ai4') ? 'selected' : '' ?>>AI ×2 — <?= enhancementAiConfigured() ? 'مُعدّ على السيرفر' : 'يحتاج إعداد Python' ?></option>
             </select>
         </label>
         <button class="lightbox-action-btn lb-enhance" onclick="enhanceImage()"><i class="fas fa-wand-magic-sparkles"></i> تحسين الصورة</button>
@@ -1196,7 +1200,7 @@ window.enhanceImage = function() {
     enhancementState = state;
     enhancementMode(true);
     const panel = document.getElementById('lbEnhancement');
-    panel.innerHTML = '<h2>تحسين الصورة</h2><p role="status">جاري تجهيز نسخة محسّنة للمقارنة… الصورة الأصلية لن تتغير قبل موافقتك.</p><button class="lightbox-action-btn" onclick="cancelEnhancement()">إلغاء والاحتفاظ بالأصل</button>';
+    panel.innerHTML = '<h2>تحسين الصورة</h2><p role="status">' + (profile === 'ai4' ? 'جاري تشغيل EDSR ×4 لإنشاء نسخة High Resolution. قد يستغرق عدة دقائق على المعالج؛ لا تغلق الصفحة.' : 'جاري تجهيز نسخة محسّنة للمقارنة…') + ' الصورة الأصلية لن تتغير قبل موافقتك.</p><button class="lightbox-action-btn" onclick="cancelEnhancement()">إلغاء والاحتفاظ بالأصل</button>';
     enhancementRequest('create', {product_id: state.productId, media_id: state.mediaId, profile: state.profile})
     .then(data => {
         if (enhancementState !== state) {
@@ -1214,12 +1218,15 @@ window.enhanceImage = function() {
             </div>
             <p id="enhancementStatus" role="status">جاري تحميل المعاينة…</p>
             <div class="enhancement-decisions">
+                <a id="enhanceDownload" class="lightbox-action-btn" hidden>تنزيل PNG كامل الدقة — بدون استبدال الأصل</a>
                 <button id="enhanceApprove" class="lightbox-action-btn lb-enhance" disabled onclick="approveImageEnhancement()">✓ اعتماد التحسين واستبدال الصورة</button>
                 <button id="enhanceCancel" class="lightbox-action-btn" onclick="cancelEnhancement()">إلغاء والاحتفاظ بالأصل</button>
             </div>`;
         const description = document.getElementById('enhancementDescription');
         const dimensions = `الأصل ${data.source_width}×${data.source_height} · النتيجة ${data.width}×${data.height}`;
-        description.textContent = data.profile === 'ai'
+        description.textContent = data.profile === 'ai4'
+            ? `EDSR ×4 — High Resolution: 16 ضعف عدد البكسلات، وPNG بدون فقد بسبب الضغط. ${dimensions}. راجع التفاصيل قبل الاعتماد؛ النموذج يقدّر التفاصيل ولا يضمن استرجاع الأصل المفقود.`
+            : data.profile === 'ai'
             ? `نموذج FSRCNN العصبي ×2 مع معالجة للمنتجات البيضاء. ${dimensions}. راجع الحواف والتفاصيل؛ التكبير ليس ضمانًا لاسترجاع المفقود.`
             : `تباين موضعي وإبراز الحواف والظلال مع حماية اللون الأبيض. ${dimensions}. معالجة محلية وليست AI؛ الأبعاد لم تتغير.`;
         let loaded = 0;
@@ -1230,6 +1237,9 @@ window.enhanceImage = function() {
                 loaded++;
                 if (loaded === 2) {
                     state.ready = true;
+                    const download = document.getElementById('enhanceDownload');
+                    download.href = data.download_url;
+                    download.hidden = false;
                     document.getElementById('enhanceApprove').disabled = false;
                     document.getElementById('enhancementStatus').textContent = 'الأصل محفوظ حتى تختار اعتماد التحسين. المعاينة صالحة لمدة 10 دقائق.';
                 }

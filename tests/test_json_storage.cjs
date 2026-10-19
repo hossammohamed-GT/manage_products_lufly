@@ -99,6 +99,25 @@ async function main() {
         assert.equal(php.fileExists('/app/'+old),false);
         await post('enhancement_approve',{token:preview.token},false);
     });
+    if (process.env.LUFLY_TEST_PYTHON && process.env.LUFLY_TEST_X4_MODEL) await check('real EDSR x4 preview/download/cancel/approval persist losslessly in files mode without SQL',async()=>{
+        await require('./ai_bridge.cjs')(php);
+        const config=php.readFileAsText('/app/config.local.php');
+        php.writeFile('/app/config.local.php',config.replace("'storage_mode'=>'files'","'enhancement_python'=>'/test-python','enhancement_x4_model'=>'/test-x4-model','storage_mode'=>'files'"));
+        try {
+            const before=snapshot(), fields={product_id:'100001',media_id:String(media.media_id),profile:'ai4'};
+            const preview=await post('enhancement_create',fields);
+            assert.equal(preview.scale,4);assert.equal(preview.width,160);assert.equal(preview.height,128);
+            assert.deepEqual(snapshot(),before);
+            const downloaded=await server.request({url:'/index.php'+preview.download_url});
+            assert.match(downloaded.headers['content-disposition'][0],/attachment/);
+            await post('enhancement_cancel',{token:preview.token});assert.deepEqual(snapshot(),before);
+            const second=await post('enhancement_create',fields);
+            const output=await server.request({url:'/index.php'+second.download_url});
+            media=await post('enhancement_approve',{token:second.token});
+            assert.match(media.path,/^uploads\/local\//);
+            assert.deepEqual(Buffer.from(php.readFileAsBuffer('/app/'+media.path)),Buffer.from(output.bytes));
+        } finally {php.writeFile('/app/config.local.php',config);}
+    });
     await check('shared images survive deleting a product and disappear after the final reference',async()=>{
         await evaluate(`catalogInsert($d,'media',['product_id'=>100002,'path'=>'${media.path}','original_name'=>'shared.png']);`);
         await post('delete',{id:'100001'});assert.equal(await record(100001),false);assert.ok(php.fileExists('/app/'+media.path));
