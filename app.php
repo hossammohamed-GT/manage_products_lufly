@@ -152,6 +152,23 @@ function install(): void
             run($db, 'INSERT INTO media (id,product_id,path,original_name,kind,caption,sort_order,previewable,source_column,source_row,sha256) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [$m['id'], $m['product_id'], $m['path'], $m['original_name'], $m['kind'], $m['caption'], $m['sort_order'], (int) $m['previewable'], $m['source_column'], $m['source_row'], $m['sha256']]);
         setSetting($db, 'installed', '1');
         $db->commit();
+        // Align id counters with the hosting dump so the next local id matches hosting.
+        try {
+            $syncReportPath = __DIR__ . '/data/sync-report.json';
+            if (is_file($syncReportPath)) {
+                $nextIds = json_decode((string) file_get_contents($syncReportPath), true)['next_ids'] ?? [];
+                foreach (['products', 'media'] as $table) {
+                    $next = (int) ($nextIds[$table] ?? 0);
+                    if ($next <= 0)
+                        continue;
+                    if (($config['driver'] ?? '') === 'mysql')
+                        $db->exec("ALTER TABLE {$table} AUTO_INCREMENT = {$next}");
+                    elseif (($config['driver'] ?? '') === 'sqlite')
+                        $db->exec("UPDATE sqlite_sequence SET seq = " . ($next - 1) . " WHERE name = '{$table}'");
+                }
+            }
+        } catch (Throwable $e) {
+        }
     } catch (Throwable $e) {
         if ($db->inTransaction())
             $db->rollBack();

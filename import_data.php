@@ -40,50 +40,52 @@ try {
     echo "2. إلغاء العملية؟\n";
     echo "\n";
 
-    // لو script من المتصفح، نعرض أزرار
+    // لو script من المتصفح: نفذ اختيار المستخدم أو اعرض الأزرار
     if (php_sapi_name() !== 'cli') {
-      echo '<form method="POST">';
-      echo '<button type="submit" name="action" value="delete" class="btn btn-danger">حذف واستيراد</button>';
-      echo '<button type="submit" name="action" value="cancel" class="btn btn-secondary">إلغاء</button>';
-      echo '</form>';
-      echo '<style>
-                    body { font-family: Arial, sans-serif; direction: rtl; padding: 20px; background: #f5f5f5; }
-                    .btn { padding: 10px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
-                    .btn-danger { background: #e74c3c; color: white; }
-                    .btn-danger:hover { background: #c0392b; }
-                    .btn-secondary { background: #95a5a6; color: white; }
-                    .btn-secondary:hover { background: #7f8c8d; }
-                  </style>';
-      exit;
-    }
+      if (isset($_POST['action'])) {
+        checkCsrf();
+        if ($_POST['action'] !== 'delete') {
+          echo '<p>❌ تم إلغاء العملية.</p>';
+          exit;
+        }
+        echo "\n🗑️  جاري حذف البيانات القديمة...\n";
+        $db->exec('DELETE FROM media');
+        $db->exec('DELETE FROM products');
+        $db->exec('DELETE FROM settings WHERE name = "installed"');
+        echo "✅ تم حذف البيانات القديمة.\n\n";
+      } else {
+        echo '<form method="POST">';
+        echo token();
+        echo '<button type="submit" name="action" value="delete" class="btn btn-danger">حذف واستيراد</button>';
+        echo '<button type="submit" name="action" value="cancel" class="btn btn-secondary">إلغاء</button>';
+        echo '</form>';
+        echo '<style>
+                      body { font-family: Arial, sans-serif; direction: rtl; padding: 20px; background: #f5f5f5; }
+                      .btn { padding: 10px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+                      .btn-danger { background: #e74c3c; color: white; }
+                      .btn-danger:hover { background: #c0392b; }
+                      .btn-secondary { background: #95a5a6; color: white; }
+                      .btn-secondary:hover { background: #7f8c8d; }
+                    </style>';
+        exit;
+      }
+    } else {
+      // لو من command line، نسأل
+      $handle = fopen("php://stdin", "r");
+      $line = fgets($handle);
+      fclose($handle);
 
-    // لو من command line، نسأل
-    $handle = fopen("php://stdin", "r");
-    $line = fgets($handle);
-    fclose($handle);
+      if (trim((string) $line) !== '1') {
+        echo "❌ تم إلغاء العملية.\n";
+        exit(0);
+      }
 
-    if (trim($line) !== '1') {
-      echo "❌ تم إلغاء العملية.\n";
-      exit(0);
-    }
-
-    // حذف البيانات القديمة
-    echo "\n🗑️  جاري حذف البيانات القديمة...\n";
-    $db->exec('DELETE FROM media');
-    $db->exec('DELETE FROM products');
-    $db->exec('DELETE FROM settings WHERE name = "installed"');
-    echo "✅ تم حذف البيانات القديمة.\n\n";
-  }
-
-  // التحقق من action من المتصفح
-  if (php_sapi_name() !== 'cli' && isset($_POST['action'])) {
-    if ($_POST['action'] === 'delete') {
+      // حذف البيانات القديمة
+      echo "\n🗑️  جاري حذف البيانات القديمة...\n";
       $db->exec('DELETE FROM media');
       $db->exec('DELETE FROM products');
       $db->exec('DELETE FROM settings WHERE name = "installed"');
-    } else {
-      echo '<p>❌ تم إلغاء العملية.</p>';
-      exit;
+      echo "✅ تم حذف البيانات القديمة.\n\n";
     }
   }
 
@@ -156,6 +158,22 @@ try {
   $db->prepare('INSERT INTO settings (name, value) VALUES ("installed", "1")')->execute();
 
   $db->commit();
+
+  // محاذاة عدادات الـ id مع قاعدة الاستضافة لو تقرير المزامنة موجود
+  try {
+    $syncReportPath = __DIR__ . '/data/sync-report.json';
+    if (is_file($syncReportPath)) {
+      $nextIds = json_decode(file_get_contents($syncReportPath), true)['next_ids'] ?? [];
+      foreach (['products', 'media'] as $table) {
+        $next = (int) ($nextIds[$table] ?? 0);
+        if ($next <= 0) continue;
+        if (($config['driver'] ?? '') === 'mysql') $db->exec("ALTER TABLE {$table} AUTO_INCREMENT = {$next}");
+        elseif (($config['driver'] ?? '') === 'sqlite') $db->exec("UPDATE sqlite_sequence SET seq = " . ($next - 1) . " WHERE name = '{$table}'");
+      }
+    }
+  } catch (Throwable $e) {
+    // المحاذاة اختيارية — الاستيراد نفسه اكتمل
+  }
 
   $duration = round(microtime(true) - $startTime, 2);
 
