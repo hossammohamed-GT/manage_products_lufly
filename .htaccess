@@ -1,1 +1,6 @@
+Options -Indexes
 
+# Keep environment files, including the tracked template, private over HTTP.
+<FilesMatch "^\.env(?:\..*)?$">
+    Require all denied
+</FilesMatch>

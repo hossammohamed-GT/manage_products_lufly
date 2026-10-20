@@ -15,21 +15,6 @@ session_start();
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
 $config = require __DIR__ . '/config.php';
-if (is_file(__DIR__ . '/config.local.php'))
-    $config = array_replace($config, require __DIR__ . '/config.local.php');
-
-// Auto-detect: if driver is mysql but MySQL is unreachable, silently fall back to SQLite
-if (($config['driver'] ?? 'mysql') === 'mysql') {
-    try {
-        $testPdo = @new PDO('mysql:host=' . $config['host'] . ';port=' . (int)$config['port'], $config['username'] ?? 'root', $config['password'] ?? '', [PDO::ATTR_TIMEOUT => 2]);
-        $testPdo = null; // MySQL is reachable, keep mysql driver
-    } catch (Throwable $e) {
-        // MySQL not reachable, fall back to SQLite automatically
-        $config['driver'] = 'sqlite';
-        if (empty($config['sqlite_path']))
-            $config['sqlite_path'] = __DIR__ . '/data/lufly.sqlite';
-    }
-}
 const STATUSES = ['Running', 'New Model', 'Slow Moving', 'Aging'];
 function h($s): string
 {
@@ -69,20 +54,13 @@ function groupCode(string $code): string
 function db(bool $serverOnly = false): PDO
 {
     global $config;
-    if ($config['driver'] === 'sqlite') {
-        $pdo = new PDO('sqlite:' . $config['sqlite_path']);
-        $pdo->exec('PRAGMA foreign_keys=ON');
-        $pdo->exec('PRAGMA busy_timeout=5000');
-    } else {
-        if (!preg_match('/^[a-zA-Z0-9_]+$/', $config['database']))
-            throw new RuntimeException('اسم قاعدة البيانات غير صالح.');
-        $dsn = 'mysql:host=' . $config['host'] . ';port=' . (int) $config['port'] . ($serverOnly ? '' : ';dbname=' . $config['database']) . ';charset=utf8mb4';
-        $pdo = new PDO($dsn, $config['username'], $config['password'], [
-            PDO::ATTR_TIMEOUT => 3,
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
-        ]);
-    }
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    if (!preg_match('/^[a-zA-Z0-9_]+$/', $config['database']))
+        throw new RuntimeException('اسم قاعدة البيانات غير صالح.');
+    $dsn = 'mysql:host=' . $config['host'] . ';port=' . (int) $config['port'] . ($serverOnly ? '' : ';dbname=' . $config['database']) . ';charset=utf8mb4';
+    $pdo = new PDO($dsn, $config['username'], $config['password'], [
+        PDO::ATTR_TIMEOUT => 3,
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
+    ]);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
     $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
     return $pdo;
@@ -113,52 +91,43 @@ function install(): void
 {
     global $config;
     $db = db(true);
-    if ($config['driver'] === 'mysql') {
-        $db->exec('CREATE DATABASE IF NOT EXISTS `' . $config['database'] . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
-        $db = db();
-        $sql = file_get_contents(__DIR__ . '/database/schema.sql');
-        foreach (explode(';', $sql) as $part)
-            if (trim($part) !== '' && !preg_match('/^\s*(CREATE DATABASE|USE )/i', $part))
-                $db->exec($part);
-        // Ensure verified column exists (for existing databases)
-        try {
-            $db->exec('ALTER TABLE products ADD COLUMN verified INT NOT NULL DEFAULT 0');
-        } catch (Throwable $e) {
-        }
-        try {
-            $db->exec('ALTER TABLE products ADD INDEX idx_verified (verified)');
-        } catch (Throwable $e) {
-        }
-    } else {
-        // Ensure SQLite directory exists
-        $sqliteDir = dirname($config['sqlite_path']);
-        if (!is_dir($sqliteDir))
-            mkdir($sqliteDir, 0755, true);
-        $db->exec('CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT,code TEXT NOT NULL DEFAULT "",brand TEXT NOT NULL DEFAULT "lufly",status TEXT NOT NULL DEFAULT "Running",description TEXT NOT NULL,notes TEXT NOT NULL,source_file TEXT NOT NULL DEFAULT "",source_row INTEGER NOT NULL DEFAULT 0,source_extra TEXT NOT NULL,archived INTEGER NOT NULL DEFAULT 0,verified INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)');
-        $db->exec('CREATE TABLE IF NOT EXISTS media (id INTEGER PRIMARY KEY AUTOINCREMENT,product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,path TEXT NOT NULL,original_name TEXT NOT NULL,kind TEXT NOT NULL,caption TEXT NOT NULL DEFAULT "",sort_order INTEGER NOT NULL DEFAULT 0,previewable INTEGER NOT NULL DEFAULT 1,source_column TEXT NOT NULL DEFAULT "",source_row INTEGER NOT NULL DEFAULT 0,sha256 TEXT NOT NULL DEFAULT "")');
-        $db->exec('CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY,value TEXT NOT NULL)');
-    }
-    $db->beginTransaction();
+    $db->exec('CREATE DATABASE IF NOT EXISTS `' . $config['database'] . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+    $db = db();
+    $sql = file_get_contents(__DIR__ . '/database/schema.sql');
+    if ($sql === false)
+        throw new RuntimeException('تعذر قراءة مخطط قاعدة البيانات.');
+    foreach (explode(';', $sql) as $part)
+        if (trim($part) !== '' && !preg_match('/^\s*(CREATE DATABASE|USE )/i', $part))
+            $db->exec($part);
+
+    // Add compatibility for existing MySQL schemas without changing their data.
     try {
-        if (setting($db, 'installed') === '1' || (int) $db->query('SELECT COUNT(*) FROM products')->fetchColumn() > 0)
-            throw new RuntimeException('تم التثبيت بالفعل. لن تتم إعادة استيراد أو استبدال بياناتك.');
-        $seed = json_decode(file_get_contents(__DIR__ . '/data/catalog.json'), true, 512, JSON_THROW_ON_ERROR);
-        $now = date('c');
-        foreach ($seed['products'] as $p)
-            run($db, 'INSERT INTO products (id,code,brand,status,description,notes,source_file,source_row,source_extra,verified,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [$p['id'], $p['code'], $p['brand'], $p['status'], $p['description'], $p['notes'], $p['source_file'], $p['source_row'], $p['source_extra'], 0, $now, $now]);
-        foreach ($seed['media'] as $m)
-            run($db, 'INSERT INTO media (id,product_id,path,original_name,kind,caption,sort_order,previewable,source_column,source_row,sha256) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [$m['id'], $m['product_id'], $m['path'], $m['original_name'], $m['kind'], $m['caption'], $m['sort_order'], (int) $m['previewable'], $m['source_column'], $m['source_row'], $m['sha256']]);
-        setSetting($db, 'installed', '1');
-        $db->commit();
+        $db->exec('ALTER TABLE products ADD COLUMN verified INT NOT NULL DEFAULT 0');
     } catch (Throwable $e) {
-        if ($db->inTransaction())
-            $db->rollBack();
-        throw $e;
+    }
+    try {
+        $db->exec('ALTER TABLE products ADD INDEX idx_verified (verified)');
+    } catch (Throwable $e) {
     }
 }
 function mediaFor(PDO $db, int $id): array
 {
     return run($db, 'SELECT * FROM media WHERE product_id=? ORDER BY sort_order,id', [$id])->fetchAll();
+}
+function mediaPathExists(string $path): bool
+{
+    $path = trim($path);
+    if ($path === '')
+        return false;
+    if (preg_match('~^https?://~i', $path))
+        return true;
+    $relativePath = ltrim(str_replace(chr(92), '/', $path), '/');
+    if ($relativePath === '' || in_array('..', explode('/', $relativePath), true) || in_array('.', explode('/', $relativePath), true))
+        return false;
+    $root = realpath(__DIR__);
+    $fullPath = realpath(__DIR__ . '/' . $relativePath);
+    return $root !== false && $fullPath !== false && is_file($fullPath)
+        && str_starts_with($fullPath, $root . DIRECTORY_SEPARATOR);
 }
 function uploadFiles(string $field = 'files'): array
 {
@@ -256,7 +225,7 @@ function saveProduct(PDO $db): int
 }
 function allProducts(PDO $db, bool $archived = false): array
 {
-    $rows = run($db, 'SELECT p.*, (SELECT COUNT(*) FROM media m WHERE m.product_id=p.id) AS media_count, (SELECT path FROM media m WHERE m.product_id=p.id AND m.previewable=1 ORDER BY CASE WHEN kind=\'photo\' THEN 0 ELSE 1 END,sort_order,id LIMIT 1) AS cover FROM products p WHERE archived=? ORDER BY id', [(int) $archived])->fetchAll();
+    $rows = run($db, 'SELECT p.*, (SELECT COUNT(*) FROM media m WHERE m.product_id=p.id) AS media_count FROM products p WHERE archived=? ORDER BY id', [(int) $archived])->fetchAll();
     $counts = [];
     foreach ($rows as $p) {
         $key = strtoupper(trim($p['code']));

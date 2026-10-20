@@ -43,13 +43,11 @@ foreach ($lines as $line) {
 }
 
 return [
-    'driver' => 'mysql',
     'host' => $env['DB_HOST'] ?? '127.0.0.1',
     'port' => (int)($env['DB_PORT'] ?? 3306),
     'database' => $env['DB_DATABASE'] ?? 'lufly_catalog',
     'username' => $env['DB_USERNAME'] ?? 'root',
     'password' => $env['DB_PASSWORD'] ?? '',
-    'sqlite_path' => __DIR__ . '/data/lufly.sqlite',
     'app_password' => $env['APP_PASSWORD'] ?? '',
     'logo_path' => 'assets/logo.png',
 ];

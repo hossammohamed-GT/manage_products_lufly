@@ -1407,7 +1407,7 @@ document.addEventListener('click', function(e) {
 function productCardHTML(array $p): string {
     $d = db();
     $media = mediaFor($d, $p['id']);
-    $previewable = array_values(array_filter($media, fn($m) => (int)$m['previewable']));
+    $previewable = array_values(array_filter($media, fn($m) => (int)$m['previewable'] && mediaPathExists((string)$m['path'])));
     
     // Build carousel
     $carouselImgs = '';
@@ -1677,16 +1677,16 @@ function showSetupError(string $message): void {
         <h3><i class="fas fa-exclamation-triangle"></i> تعذر الاتصال بقاعدة البيانات</h3>
         <p style="margin:12px 0;"><?= h($message) ?></p>
         <div style="text-align:right;margin-top:20px;padding:16px;background:rgba(0,0,0,0.05);border-radius:8px;">
-            <h4 style="margin-bottom:10px;">خطوات الحل:</h4>
+            <h4 style="margin-bottom:10px;">تحقق من إعدادات MySQL:</h4>
             <ol style="padding-right:20px;line-height:2;">
-                <li>افتح <strong>XAMPP Control Panel</strong></li>
-                <li>تأكد إن <strong>MySQL شغال</strong> (لو مش شغال اضغط Start)</li>
-                <li>بعد ما MySQL يشتغل، حدّث الصفحة (F5)</li>
+                <li>راجع قيم <strong>DB_HOST وDB_PORT وDB_DATABASE وDB_USERNAME وDB_PASSWORD</strong> في ملف <strong>.env</strong>؛ إذا لم يوجد، يُنشأ من <strong>.env.example</strong>.</li>
+                <li>تأكد أن خادم MySQL متاح وأن المستخدم لديه صلاحية الاتصال بقاعدة البيانات المحددة.</li>
+                <li>تأكد من تفعيل إضافة <strong>PDO MySQL</strong> في PHP.</li>
+                <li>لو الجداول غير موجودة، أنشئها من <strong>database/schema.sql</strong>. التطبيق لا يستورد بيانات تجريبية أو ملفات seed.</li>
             </ol>
         </div>
         <div style="margin-top:20px;">
-            <a href="setup.php" class="btn btn-primary" style="margin:4px;"><i class="fas fa-stethoscope"></i> فحص النظام</a>
-            <a href="?action=home" class="btn btn-outline" style="margin:4px;"><i class="fas fa-sync"></i> تحديث</a>
+            <a href="?action=home" class="btn btn-outline" style="margin:4px;"><i class="fas fa-sync"></i> إعادة المحاولة</a>
         </div>
     </div>
     <?php

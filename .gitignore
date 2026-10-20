@@ -1,4 +1,4 @@
-# Environment file (contains credentials - NEVER commit)
+# Environment and legacy local config files (contain credentials - NEVER commit)
 .env
 !/.env.example
 /config.local.php
@@ -7,10 +7,6 @@
 /uploads/*
 !/uploads/.htaccess
 !/uploads/.gitkeep
-
-# Data
-/data/*.lock
-/data/*.sqlite*
 
 # Google Drive
 /google_drive/

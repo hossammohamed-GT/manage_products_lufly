@@ -62,11 +62,11 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
     // Get first image for each group
     $d = db();
     $firstImages = [];
-    $stmt = $d->query('SELECT p.id, p.code, (SELECT m.path FROM media m WHERE m.product_id=p.id AND m.previewable=1 ORDER BY m.sort_order,m.id LIMIT 1) AS path FROM products p WHERE p.archived=0 ORDER BY p.id');
+    $stmt = $d->query('SELECT p.id, p.code, m.path FROM products p JOIN media m ON m.product_id=p.id WHERE p.archived=0 AND m.previewable=1 ORDER BY p.id,m.sort_order,m.id');
     $seen = [];
     while ($row = $stmt->fetch()) {
         $prefix = groupCode($row['code']);
-        if ($row['path'] && !isset($seen[$prefix])) {
+        if (!isset($seen[$prefix]) && mediaPathExists((string)$row['path'])) {
             $firstImages[$prefix] = $row['path'];
             $seen[$prefix] = true;
         }
