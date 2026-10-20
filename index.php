@@ -116,6 +116,43 @@ try {
         exit;
     }
 
+    if ($action === 'category_assign' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        header('Content-Type: application/json; charset=utf-8');
+        try {
+            checkCsrf();
+            $d = db();
+            $result = assignProductCategory($d, (int)($_POST['product_id'] ?? 0), (int)($_POST['category_id'] ?? 0));
+            echo json_encode(['ok' => true] + $result, JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        }
+        exit;
+    }
+
+    if ($action === 'category_manage' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        try {
+            checkCsrf();
+            $d = db();
+            $operation = (string)($_POST['operation'] ?? '');
+            if ($operation === 'add') {
+                createCategoryNode($d, (int)($_POST['parent_id'] ?? 0), (string)($_POST['name'] ?? ''));
+                flash('تمت إضافة التصنيف.');
+            } elseif ($operation === 'rename') {
+                renameCategoryNode($d, (int)($_POST['category_id'] ?? 0), (string)($_POST['name'] ?? ''));
+                flash('تم تحديث اسم التصنيف.');
+            } elseif ($operation === 'delete') {
+                deleteCategoryNode($d, (int)($_POST['category_id'] ?? 0));
+                flash('تم حذف التصنيف.');
+            } else {
+                throw new RuntimeException('عملية التصنيف غير صالحة.');
+            }
+        } catch (Throwable $e) {
+            flash($e->getMessage(), 'error');
+        }
+        go('?action=categories');
+    }
+
     // Logout
     if ($action === 'logout') {
         foreach (array_keys($_SESSION['enhancements'] ?? []) as $token) discardEnhancement($token);
@@ -207,6 +244,8 @@ try {
         case 'group': showGroup($_GET['prefix'] ?? '', $page); break;
         case 'search': showSearch($_GET['q'] ?? '', $page); break;
         case 'archive_list': showArchive($page); break;
+        case 'categories': showCategories(); break;
+        case 'category': showCategory((int)($_GET['category_id'] ?? 0), $page); break;
         case 'setup_error': showSetupError($setupError ?? 'تعذر إعداد قاعدة البيانات'); break;
         case 'settings': showSettings(); break;
         case 'save_settings':
@@ -250,8 +289,12 @@ function layout(string $title, string $content, array $groups = [], string $extr
     $primary = $d ? setting($d, 'primary_color', '#1F9E9E') : '#1F9E9E';
     $secondary = $d ? setting($d, 'secondary_color', '#147070') : '#147070';
     $flash = $_SESSION['flash'] ?? '';
-    unset($_SESSION['flash']);
-    $sidebarHtml = $d ? renderSidebar($groups, (string)($_GET['prefix'] ?? '')) : '';
+    $flashType = $_SESSION['flash_type'] ?? 'success';
+    unset($_SESSION['flash'], $_SESSION['flash_type']);
+    $categoryTreeData = $d && categorySchemaReady($d) ? categoryTree($d) : [];
+    $sidebarHtml = $d && !in_array($action, ['categories', 'category'], true)
+        ? renderSidebar($groups, (string)($_GET['prefix'] ?? ''))
+        : '';
     ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -298,7 +341,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .top-header .logo-text { font-weight: 800; font-size: 1.1rem; color: var(--primary); letter-spacing: 1px; }
 .top-header .logout-btn { color: var(--text-muted); text-decoration: none; font-size: 1.2rem; transition: color 0.2s; }
 .top-header .logout-btn:hover { color: var(--danger); }
-.top-nav { display: flex; gap: 6px; }
+.top-nav { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
 .top-nav a { color: var(--text-muted); text-decoration: none; padding: 8px 14px; border-radius: 8px; font-size: 0.9rem; transition: all 0.2s; cursor: pointer; }
 .top-nav a:hover, .top-nav a.active { background: var(--primary-light); color: var(--primary); }
 
@@ -332,8 +375,64 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .toolbar-search:focus { border-color: var(--primary); }
 .toolbar-select { padding: 10px 14px; border: 2px solid var(--border); border-radius: 10px; font-size: 0.9rem; background: white; outline: none; cursor: pointer; }
 
+/* Product category assignment */
+.product-category { padding: 12px 10px 4px; }
+.product-category-label { display: block; color: var(--text-muted); font-size: .78rem; font-weight: 700; margin-bottom: 6px; }
+.category-path-control { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; background: #f8fafc; color: var(--text); text-align: right; cursor: pointer; font: inherit; }
+.category-path-control:hover { border-color: var(--primary); background: var(--primary-light); }
+.category-path-text { min-width: 0; overflow-wrap: anywhere; font-size: .86rem; }
+.category-path-edit { color: var(--primary); white-space: nowrap; font-size: .8rem; font-weight: 700; }
+.category-editor { margin-top: 9px; padding: 11px; border: 1px solid var(--border); border-radius: 10px; background: #fbfcfd; }
+.category-editor[hidden] { display: none; }
+.category-selects { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.category-select { width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--border); border-radius: 8px; background: white; color: var(--text); font: inherit; font-size: .82rem; }
+.category-select:disabled { background: #f1f3f5; color: #9ca3af; }
+.category-editor-actions { display: flex; gap: 8px; margin-top: 9px; }
+.category-editor-actions button { border: 0; border-radius: 8px; padding: 8px 12px; font: inherit; font-size: .82rem; font-weight: 700; cursor: pointer; }
+.category-save-btn { background: var(--primary); color: white; }
+.category-save-btn:disabled { opacity: .5; cursor: not-allowed; }
+.category-cancel-btn { background: #e5e7eb; color: var(--text-muted); }
+.category-migration-hint { display: block; margin-top: 6px; color: var(--warning); font-size: .78rem; }
+
+/* Category management and browsing */
+.category-admin { display: grid; gap: 18px; }
+.category-intro, .category-add-panel, .category-tree-panel, .category-browser-panel { background: white; border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; }
+.category-intro h2, .category-add-panel h2, .category-tree-panel h2 { margin-bottom: 6px; font-size: 1.1rem; }
+.category-intro p, .category-help { color: var(--text-muted); font-size: .9rem; }
+.category-add-grid { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 2fr) auto; gap: 10px; align-items: end; margin-top: 14px; }
+.category-form-field { display: grid; gap: 6px; font-size: .82rem; font-weight: 700; }
+.category-form-field input, .category-form-field select, .category-rename-input { min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; font: inherit; background: white; }
+.category-submit-btn, .category-action-btn { border: 0; border-radius: 8px; padding: 9px 11px; font: inherit; font-size: .8rem; font-weight: 700; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.category-submit-btn { background: var(--primary); color: white; }
+.category-action-btn { background: #eef2f7; color: var(--text); }
+.category-action-btn:hover { background: var(--primary); color: white; }
+.category-action-btn.danger { background: #fff0f0; color: var(--danger); }
+.category-action-btn.danger:hover { background: var(--danger); color: white; }
+.category-tree { margin-top: 16px; display: grid; gap: 11px; }
+.category-node { border: 1px solid var(--border); border-radius: 11px; background: #fff; overflow: hidden; }
+.category-node-row { min-height: 58px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; }
+.category-node.level-1 { border-right: 4px solid var(--primary); }
+.category-node.level-2 { margin: 8px 22px 0 0; border-right: 3px solid #7cbdba; }
+.category-node.level-3 { margin: 7px 22px 0 0; border-right: 2px solid #d5e8e7; }
+.category-node-name { flex: 1 1 170px; font-weight: 800; }
+.category-level-badge { border-radius: 20px; background: var(--primary-light); color: var(--primary-dark); padding: 3px 8px; font-size: .72rem; font-weight: 700; white-space: nowrap; }
+.category-node-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.category-node-actions form { margin: 0; }
+.category-children { padding: 0 10px 10px; }
+.category-rename-dialog { width: min(420px, calc(100vw - 32px)); border: 0; border-radius: 14px; padding: 22px; box-shadow: var(--shadow-lg); margin: auto; }
+.category-rename-dialog::backdrop { background: rgba(15, 23, 42, .5); }
+.category-rename-dialog h3 { margin-bottom: 14px; }
+.category-rename-dialog .category-form-field { margin-bottom: 14px; }
+.category-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.category-migration-box { margin: 18px 0; padding: 18px; border: 1px solid #f5d58a; border-radius: 12px; background: #fff9e8; color: #684d05; }
+.category-migration-box code { direction: ltr; unicode-bidi: embed; }
+.category-child-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 20px; }
+.category-child-link { background: white; padding: 8px 12px; border: 1px solid var(--border); border-radius: 18px; color: var(--primary-dark); text-decoration: none; font-size: .85rem; font-weight: 700; }
+.category-child-link:hover { background: var(--primary); color: white; }
+
 /* ═══ FLASH ═══ */
 .flash { background: var(--success); color: white; padding: 12px 18px; border-radius: 10px; margin-bottom: 16px; font-weight: 600; font-size: 0.95rem; }
+.flash.error { background: var(--danger); }
 
 /* ═══ PRODUCTS GRID ══ */
 .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 24px; }
@@ -832,6 +931,8 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     .toolbar { flex-direction: column; align-items: stretch; }
     .products-grid { grid-template-columns: 1fr; }
     .top-header { flex-direction: column; gap: 8px; }
+    .category-selects, .category-add-grid { grid-template-columns: 1fr; }
+    .category-node.level-2, .category-node.level-3 { margin-right: 10px; }
 }
 @media (max-width: 900px) { .sidebar { display: none; } }
 </style>
@@ -844,7 +945,12 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
         <img src="<?= h($config['logo_path'] ?? 'assets/logo.png') ?>" alt="LUFLY">
         <span class="logo-text"><?= h($siteTitle) ?></span>
     </a>
-    <nav class="top-nav"><a href="?action=home">المنتجات</a><a href="?action=archive_list">الأرشيف</a><a href="?action=settings">الإعدادات</a></nav>
+    <nav class="top-nav">
+        <a href="?action=home" class="<?= in_array($action, ['home','group','search','category'], true) ? 'active' : '' ?>">المنتجات</a>
+        <a href="?action=categories" class="<?= $action === 'categories' ? 'active' : '' ?>">التصنيفات</a>
+        <a href="?action=archive_list" class="<?= $action === 'archive_list' ? 'active' : '' ?>">الأرشيف</a>
+        <a href="?action=settings" class="<?= $action === 'settings' ? 'active' : '' ?>">الإعدادات</a>
+    </nav>
     <a href="?action=logout" class="logout-btn" title="تسجيل الخروج"><i class="fas fa-sign-out-alt"></i></a>
 </div>
 
@@ -884,7 +990,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 <div class="main-layout">
     <?= $sidebarHtml ?>
     <div class="main-content">
-        <?php if ($flash): ?><div class="flash"><?= h($flash) ?></div><?php endif; ?>
+        <?php if ($flash): ?><div class="flash <?= h($flashType) ?>" role="status"><?= h($flash) ?></div><?php endif; ?>
         
         <!-- Bulk verify bar -->
         <div class="bulk-verify-bar" id="bulkVerifyBar">
@@ -895,11 +1001,13 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
             </div>
         </div>
         
+        <?php if (!in_array($action, ['categories', 'category', 'settings'], true)): ?>
         <form method="get" class="toolbar" role="search">
             <input type="hidden" name="action" value="search">
             <input type="search" class="toolbar-search" name="q" placeholder="ابحث بالكود أو الوصف أو الماركة" value="<?= h($_GET['q'] ?? '') ?>">
             <button type="submit" class="card-btn">بحث</button>
         </form>
+        <?php endif; ?>
         <?= $content ?>
     </div>
 </div>
@@ -919,9 +1027,159 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 <div id="toast"></div>
 
 <?php sidebarAssets(); ?>
+<script>
+const categoryTreeData = <?= json_encode($categoryTreeData, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?: '[]' ?>;
+</script>
 <?= $extraJs ?>
 <script>
 const csrfToken = document.querySelector('meta[name="csrf"]')?.content || '';
+
+function findCategoryNode(id, nodes = categoryTreeData) {
+    id = Number(id);
+    for (const node of nodes || []) {
+        if (Number(node.id) === id) return node;
+        const nested = findCategoryNode(id, node.children || []);
+        if (nested) return nested;
+    }
+    return null;
+}
+function findCategoryPath(id, nodes = categoryTreeData, prefix = []) {
+    id = Number(id);
+    for (const node of nodes || []) {
+        const current = prefix.concat(node);
+        if (Number(node.id) === id) return current;
+        const nested = findCategoryPath(id, node.children || [], current);
+        if (nested.length) return nested;
+    }
+    return [];
+}
+function fillCategorySelect(select, nodes, placeholder, selectedId = '') {
+    select.replaceChildren(new Option(placeholder, ''));
+    (nodes || []).forEach(node => select.add(new Option(node.name, String(node.id))));
+    select.disabled = !nodes || nodes.length === 0;
+    if (selectedId && (nodes || []).some(node => Number(node.id) === Number(selectedId))) select.value = String(selectedId);
+}
+function categoryEditorElements(editor) {
+    return {
+        level1: editor.querySelector('[data-category-level="1"]'),
+        level2: editor.querySelector('[data-category-level="2"]'),
+        level3: editor.querySelector('[data-category-level="3"]'),
+        save: editor.querySelector('.category-save-btn')
+    };
+}
+function refreshCategoryEditor(editor) {
+    const {level1, level2, level3, save} = categoryEditorElements(editor);
+    const first = findCategoryNode(level1.value);
+    const second = findCategoryNode(level2.value);
+    if (!level1.value) {
+        level2.disabled = true;
+        level3.disabled = true;
+        editor.dataset.selectedCategoryId = '0';
+        save.disabled = false;
+    } else if (!first) {
+        editor.dataset.selectedCategoryId = '';
+        save.disabled = true;
+    } else if (!(first.children || []).length) {
+        level2.disabled = true;
+        level3.disabled = true;
+        editor.dataset.selectedCategoryId = String(first.id);
+        save.disabled = false;
+    } else if (!level2.value || !second) {
+        level3.disabled = true;
+        editor.dataset.selectedCategoryId = '';
+        save.disabled = true;
+    } else if (!(second.children || []).length) {
+        level3.disabled = true;
+        editor.dataset.selectedCategoryId = String(second.id);
+        save.disabled = false;
+    } else if (!level3.value) {
+        editor.dataset.selectedCategoryId = '';
+        save.disabled = true;
+    } else {
+        const third = findCategoryNode(level3.value);
+        editor.dataset.selectedCategoryId = third ? String(third.id) : '';
+        save.disabled = !third;
+    }
+}
+window.openCategoryEditor = function(button, productId) {
+    const card = button.closest('.product-card');
+    const editor = card?.querySelector('.category-editor');
+    if (!editor) return;
+    const path = findCategoryPath(Number(button.dataset.categoryId || 0));
+    const {level1, level2, level3} = categoryEditorElements(editor);
+    fillCategorySelect(level1, categoryTreeData, 'اختر التصنيف الرئيسي أو إزالة التصنيف', path[0]?.id || '');
+    const first = findCategoryNode(path[0]?.id);
+    fillCategorySelect(level2, first?.children || [], 'اختر التصنيف الفرعي', path[1]?.id || '');
+    const second = findCategoryNode(path[1]?.id);
+    fillCategorySelect(level3, second?.children || [], 'اختر التصنيف الفرعي الثالث', path[2]?.id || '');
+    level1.onchange = () => {
+        const node = findCategoryNode(level1.value);
+        fillCategorySelect(level2, node?.children || [], 'اختر التصنيف الفرعي');
+        fillCategorySelect(level3, [], 'اختر التصنيف الفرعي الثالث');
+        refreshCategoryEditor(editor);
+    };
+    level2.onchange = () => {
+        const node = findCategoryNode(level2.value);
+        fillCategorySelect(level3, node?.children || [], 'اختر التصنيف الفرعي الثالث');
+        refreshCategoryEditor(editor);
+    };
+    level3.onchange = () => refreshCategoryEditor(editor);
+    editor.dataset.productId = String(productId);
+    editor.hidden = false;
+    refreshCategoryEditor(editor);
+};
+window.closeCategoryEditor = function(button) {
+    const editor = button.closest('.category-editor');
+    if (editor) editor.hidden = true;
+};
+window.saveProductCategory = function(button) {
+    const editor = button.closest('.category-editor');
+    if (!editor || button.disabled) return;
+    const fd = new FormData();
+    fd.append('csrf', csrfToken);
+    fd.append('product_id', editor.dataset.productId);
+    fd.append('category_id', editor.dataset.selectedCategoryId || '0');
+    button.disabled = true;
+    showToast('جاري حفظ التصنيف...');
+    fetch('?action=category_assign', {method:'POST', body:fd})
+    .then(response => response.json())
+    .then(data => {
+        if (!data.ok) throw new Error(data.error || 'تعذر حفظ التصنيف');
+        const card = editor.closest('.product-card');
+        const path = (data.category_path || []).map(node => node.name).join(' / ');
+        const pathText = card?.querySelector('.category-path-text');
+        if (pathText) pathText.textContent = path || 'غير مصنف — اضغط للتعيين';
+        if (card) card.dataset.version = String(data.version);
+        const pathButton = card?.querySelector('.category-path-control');
+        if (pathButton) pathButton.dataset.categoryId = String(data.category_id);
+        editor.hidden = true;
+        if (new URLSearchParams(location.search).get('action') === 'category') {
+            location.reload();
+            return;
+        }
+        showToast('تم حفظ التصنيف', 'success');
+    })
+    .catch(error => {
+        showToast(error.message || 'خطأ في الاتصال', 'error');
+        refreshCategoryEditor(editor);
+    });
+};
+window.selectCategoryParent = function(parentId) {
+    const select = document.getElementById('categoryParentSelect');
+    const form = document.getElementById('categoryAddForm');
+    if (!select || !form) return;
+    select.value = String(parentId);
+    form.scrollIntoView({behavior:'smooth', block:'center'});
+    document.getElementById('newCategoryName')?.focus({preventScroll:true});
+};
+window.openCategoryRename = function(button) {
+    const dialog = document.getElementById('categoryRenameDialog');
+    if (!dialog) return;
+    dialog.querySelector('[name="category_id"]').value = button.dataset.categoryId;
+    dialog.querySelector('[name="name"]').value = button.dataset.categoryName;
+    dialog.showModal();
+    dialog.querySelector('[name="name"]').focus();
+};
 
 // ═══ INLINE EDITING ═══
 window.inlineEdit = function(el, field, productId, productVersion) {
@@ -1381,7 +1639,7 @@ function updateBulkBar() {
 // Allow clicking on card body to toggle selection (not on interactive elements)
 document.addEventListener('click', function(e) {
     // Don't trigger if clicking on interactive elements
-    if (e.target.closest('.inline-field, .inline-edit-form, .carousel-btn, .upload-btn, .card-btn, .lightbox-trigger, .verify-check')) return;
+    if (e.target.closest('.inline-field, .inline-edit-form, .carousel-btn, .upload-btn, .card-btn, .category-control, .lightbox-trigger, .verify-check')) return;
     
     const card = e.target.closest('.product-card');
     if (!card) return;
@@ -1431,6 +1689,27 @@ function productCardHTML(array $p): string {
     $noImage = empty($previewable) ? '<div class="no-image"><i class="far fa-image"></i></div>' : '';
     
     $verifiedIcon = $isVerified ? '<i class="fas fa-check-circle verified-icon"></i>' : '<i class="far fa-circle verify-icon"></i>';
+    $categoryId = (int)($p['category_id'] ?? 0);
+    $categoryPath = array_column($p['category_path'] ?? [], 'name');
+    $categoryText = $categoryPath ? implode(' / ', $categoryPath) : 'غير مصنف — اضغط للتعيين';
+    $categoryMarkup = '<div class="product-category"><span class="product-category-label"><i class="fas fa-folder-tree"></i> تصنيف المنتج</span>';
+    if (!empty($p['category_ready'])) {
+        $categoryMarkup .= '<button type="button" class="category-path-control category-control" data-category-id="'.$categoryId.'" onclick="event.stopPropagation();openCategoryEditor(this,'.$p['id'].')">'
+            .'<span class="category-path-text">'.h($categoryText).'</span><span class="category-path-edit"><i class="fas fa-pen"></i> تغيير</span></button>'
+            .'<div class="category-editor category-control" hidden data-product-id="'.$p['id'].'">'
+            .'<div class="category-selects">'
+            .'<select class="category-select" data-category-level="1" aria-label="التصنيف الرئيسي"></select>'
+            .'<select class="category-select" data-category-level="2" aria-label="التصنيف الفرعي" disabled></select>'
+            .'<select class="category-select" data-category-level="3" aria-label="التصنيف الفرعي الثالث" disabled></select>'
+            .'</div><div class="category-editor-actions">'
+            .'<button type="button" class="category-save-btn" onclick="event.stopPropagation();saveProductCategory(this)">حفظ التصنيف</button>'
+            .'<button type="button" class="category-cancel-btn" onclick="event.stopPropagation();closeCategoryEditor(this)">إلغاء</button>'
+            .'</div></div>';
+    } else {
+        $categoryMarkup .= '<span class="category-path-control"><span class="category-path-text">'.h($categoryText).'</span></span>'
+            .'<span class="category-migration-hint">لتفعيل التصنيفات، شغّل database/migrations/001_category_hierarchy.sql</span>';
+    }
+    $categoryMarkup .= '</div>';
     
     return '<div class="product-card'.$verifiedClass.'" data-id="'.$p['id'].'" data-version="'.$p['version'].'" data-verified="'.($isVerified?'1':'0').'">'
         .'<div class="card-carousel">'
@@ -1457,6 +1736,7 @@ function productCardHTML(array $p): string {
         .'<div class="inline-field-value" data-value="'.h($p['status']).'"><span class="status-badge '.$statusClass.'">'.$statusText.'</span></div>'
         .'<div class="inline-edit-form"><select>'.implode('', array_map(fn($s)=>'<option value="'.$s.'"'.($s===$p['status']?' selected':'').'>'.$s.'</option>', STATUSES)).'</select><div class="inline-edit-actions"><button class="btn-cancel">إلغاء</button><button class="btn-save">حفظ</button></div></div>'
         .'</div>'
+        .$categoryMarkup
         .'<div style="padding:0 10px;"><label class="upload-btn"><i class="fas fa-upload"></i> رفع صورة<input type="file" accept="image/*" style="display:none" onchange="mediaAction(\'add\',0,'.$p['id'].',this.files[0])"></label></div>'
         .'</div>'
         .'<div class="product-card-footer">'
@@ -1589,6 +1869,173 @@ function showSettings(): void {
     </form>
     <?php
     layout('الإعدادات', ob_get_clean(), getGroups($d), '', 'settings');
+}
+
+function categoryParentOptions(array $nodes, array $path = [], int $level = 1): array
+{
+    $options = [];
+    foreach ($nodes as $node) {
+        $currentPath = array_merge($path, [(string)$node['name']]);
+        if ($level < 3)
+            $options[] = ['id' => (int)$node['id'], 'label' => implode(' / ', $currentPath)];
+        if (!empty($node['children']))
+            $options = array_merge($options, categoryParentOptions($node['children'], $currentPath, $level + 1));
+    }
+    return $options;
+}
+function categoryManagerNodesHtml(array $nodes, int $level = 1): string
+{
+    $levelNames = [1 => 'رئيسي', 2 => 'فرعي', 3 => 'فرعي ثالث'];
+    $html = '';
+    foreach ($nodes as $node) {
+        $id = (int)$node['id'];
+        $name = (string)$node['name'];
+        $html .= '<section class="category-node level-'.$level.'"><div class="category-node-row">'
+            .'<span class="category-level-badge">'.$levelNames[$level].'</span>'
+            .'<span class="category-node-name">'.h($name).'</span><div class="category-node-actions">'
+            .'<a class="category-action-btn" href="?action=category&amp;category_id='.$id.'">عرض المنتجات</a>';
+        if ($level < 3)
+            $html .= '<button type="button" class="category-action-btn" onclick="selectCategoryParent('.$id.')"><i class="fas fa-plus"></i> إضافة فرعي</button>';
+        $html .= '<button type="button" class="category-action-btn" data-category-rename data-category-id="'.$id.'" data-category-name="'.h($name).'" onclick="openCategoryRename(this)"><i class="fas fa-pen"></i> تعديل الاسم</button>'
+            .'<form method="post" action="?action=category_manage" onsubmit="return confirm(\'تأكيد حذف التصنيف؟ يجب حذف فروعه وإعادة تعيين المنتجات أولًا.\')">'
+            .token().'<input type="hidden" name="operation" value="delete"><input type="hidden" name="category_id" value="'.$id.'">'
+            .'<button type="submit" class="category-action-btn danger"><i class="fas fa-trash"></i> حذف</button></form>'
+            .'</div></div>';
+        if (!empty($node['children']))
+            $html .= '<div class="category-children">'.categoryManagerNodesHtml($node['children'], $level + 1).'</div>';
+        $html .= '</section>';
+    }
+    return $html;
+}
+function categoryMigrationNotice(): string
+{
+    return '<div class="category-migration-box"><h2>تفعيل التصنيفات</h2>'
+        .'<p>شغّل الملف <code>database/migrations/001_category_hierarchy.sql</code> مرة واحدة على قاعدة بيانات الكتالوج الحالية. الملف يضيف الجداول وشجرة التصنيفات فقط، ولا يمسح أو يعدّل المنتجات أو الصور.</p>'
+        .'<p>بعد تشغيله، حدّث الصفحة لتظهر مستويات Bathroom وKitchen وKids وغيرها وتبدأ في إسناد المنتجات.</p></div>';
+}
+function showCategories(): void
+{
+    $d = db();
+    $groups = getGroups($d);
+    if (!categorySchemaReady($d)) {
+        layout('إدارة التصنيفات', '<div class="category-admin">'.categoryMigrationNotice().'</div>', $groups, '', 'categories');
+        return;
+    }
+    $tree = categoryTree($d);
+    $parentOptions = categoryParentOptions($tree);
+    ob_start();
+    ?>
+    <div class="category-admin">
+        <section class="category-intro">
+            <h2>تصنيفات المنتجات — ثلاثة مستويات</h2>
+            <p>رتّب الكتالوج من التصنيف الرئيسي إلى الفرعي ثم الفرعي الثالث. المنتجات تُسند إلى آخر مستوى موجود في المسار، ويمكن تعديل التصنيف مباشرة من بطاقة المنتج.</p>
+            <p class="category-help">حذف تصنيف لا يحذف المنتجات: انقل المنتجات أولًا، واحذف الفروع من المستوى الثالث للأعلى.</p>
+        </section>
+        <section class="category-add-panel">
+            <h2>إضافة تصنيف أو مستوى فرعي</h2>
+            <form id="categoryAddForm" method="post" action="?action=category_manage" class="category-add-grid">
+                <?= token() ?>
+                <input type="hidden" name="operation" value="add">
+                <label class="category-form-field">اسم المستوى الجديد
+                    <input id="newCategoryName" type="text" name="name" maxlength="190" required placeholder="اكتب اسم التصنيف">
+                </label>
+                <label class="category-form-field">المستوى الأب
+                    <select id="categoryParentSelect" name="parent_id">
+                        <option value="0">تصنيف رئيسي — دون أب</option>
+                        <?php foreach ($parentOptions as $option): ?>
+                            <option value="<?= (int)$option['id'] ?>"><?= h($option['label']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <button type="submit" class="category-submit-btn"><i class="fas fa-plus"></i> إضافة</button>
+            </form>
+            <p class="category-help" style="margin-top:10px">اختر تصنيفًا رئيسيًا ليصبح المستوى الثاني تحته، أو اختر مستوى ثانيًا لإضافة مستوى ثالث.</p>
+        </section>
+        <section class="category-tree-panel">
+            <h2>شجرة التصنيفات</h2>
+            <?php if ($tree): ?>
+                <div class="category-tree"><?= categoryManagerNodesHtml($tree) ?></div>
+            <?php else: ?>
+                <p class="category-help">لا توجد تصنيفات بعد. أضف تصنيفًا رئيسيًا للبدء.</p>
+            <?php endif; ?>
+        </section>
+    </div>
+    <dialog id="categoryRenameDialog" class="category-rename-dialog">
+        <form method="post" action="?action=category_manage">
+            <?= token() ?>
+            <input type="hidden" name="operation" value="rename">
+            <input type="hidden" name="category_id" value="">
+            <h3>تعديل اسم التصنيف</h3>
+            <label class="category-form-field">الاسم الجديد
+                <input class="category-rename-input" type="text" name="name" maxlength="190" required>
+            </label>
+            <div class="category-dialog-actions">
+                <button type="submit" class="category-submit-btn">حفظ الاسم</button>
+                <button type="button" class="category-action-btn" onclick="document.getElementById('categoryRenameDialog').close()">إلغاء</button>
+            </div>
+        </form>
+    </dialog>
+    <?php
+    layout('إدارة التصنيفات', ob_get_clean(), $groups, '', 'categories');
+}
+function showCategory(int $categoryId, int $page): void
+{
+    $d = db();
+    if (!categorySchemaReady($d)) {
+        layout('التصنيف', '<div class="category-admin">'.categoryMigrationNotice().'</div>', getGroups($d), '', 'category');
+        return;
+    }
+    $rows = categoryRows($d);
+    $byId = [];
+    $childrenByParent = [];
+    foreach ($rows as $row) {
+        $id = (int)$row['id'];
+        $byId[$id] = $row;
+        $parentId = $row['parent_id'] === null ? 0 : (int)$row['parent_id'];
+        $childrenByParent[$parentId][] = $id;
+    }
+    if (!isset($byId[$categoryId])) {
+        showError('التصنيف المطلوب غير موجود.');
+        return;
+    }
+    $categoryIds = [];
+    $queue = [$categoryId];
+    while ($queue) {
+        $currentId = array_shift($queue);
+        if (in_array($currentId, $categoryIds, true))
+            continue;
+        $categoryIds[] = $currentId;
+        foreach ($childrenByParent[$currentId] ?? [] as $childId)
+            $queue[] = $childId;
+    }
+    $products = array_values(array_filter(allProducts($d, false), fn($product) => in_array((int)$product['category_id'], $categoryIds, true)));
+    $path = categoryPathFromId($categoryId, $byId);
+    $pathLabel = implode(' / ', array_column($path, 'name'));
+    $children = $childrenByParent[$categoryId] ?? [];
+    $perPage = 12;
+    $total = count($products);
+    $totalPages = max(1, (int)ceil($total / $perPage));
+    $page = max(1, min($page, $totalPages));
+    ob_start();
+    ?>
+    <div class="category-browser-panel">
+        <div class="toolbar" style="padding:0;box-shadow:none;margin:0 0 10px">
+            <div class="toolbar-title"><?= h($pathLabel) ?></div>
+            <div class="toolbar-count"><?= $total ?> منتج</div>
+            <a class="category-action-btn" href="?action=categories">إدارة شجرة التصنيفات</a>
+        </div>
+        <?php if ($children): ?>
+            <div class="category-child-links">
+                <?php foreach ($children as $childId): ?>
+                    <a class="category-child-link" href="?action=category&amp;category_id=<?= $childId ?>"><?= h((string)$byId[$childId]['name']) ?></a>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+        <p class="category-help">تظهر هنا المنتجات المسندة لهذا التصنيف أو لأي مستوى تابع له. اختر منتجًا لتغيير تصنيفه من البطاقة.</p>
+    </div>
+    <?php renderProducts(array_slice($products, ($page - 1) * $perPage, $perPage), $page, $totalPages, '?action=category&category_id='.$categoryId); ?>
+    <?php
+    layout($pathLabel, ob_get_clean(), getGroups($d), '', 'category');
 }
 
 function showArchive(int $page): void {

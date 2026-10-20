@@ -41,15 +41,178 @@ function go(string $url): void
     header('Location: ' . $url);
     exit;
 }
-function flash(string $message): void
+function flash(string $message, string $type = 'success'): void
 {
     $_SESSION['flash'] = $message;
+    $_SESSION['flash_type'] = $type === 'error' ? 'error' : 'success';
 }
 function groupCode(string $code): string
 {
     $code = trim($code);
     $pos = strpos($code, '-');
     return $pos !== false && $pos > 0 ? strtoupper(trim(substr($code, 0, $pos))) : 'غير مصنف';
+}
+function categorySchemaReady(PDO $db): bool
+{
+    static $checked = false;
+    static $ready = false;
+    if ($checked)
+        return $ready;
+    $checked = true;
+    try {
+        $ready = (int)$db->query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('categories','product_categories')")->fetchColumn() === 2;
+    } catch (Throwable $e) {
+        $ready = false;
+    }
+    return $ready;
+}
+function categoryRows(PDO $db): array
+{
+    if (!categorySchemaReady($db))
+        return [];
+    return $db->query('SELECT id,category_key,parent_id,name,sort_order FROM categories ORDER BY COALESCE(parent_id,0),sort_order,id')->fetchAll();
+}
+function categoryTree(PDO $db): array
+{
+    $byParent = [];
+    foreach (categoryRows($db) as $row) {
+        $parentId = $row['parent_id'] === null ? 0 : (int)$row['parent_id'];
+        $byParent[$parentId][] = [
+            'id' => (int)$row['id'],
+            'parent_id' => $parentId ?: null,
+            'name' => (string)$row['name'],
+            'children' => [],
+        ];
+    }
+    $build = function (int $parentId) use (&$build, $byParent): array {
+        $nodes = $byParent[$parentId] ?? [];
+        foreach ($nodes as &$node)
+            $node['children'] = $build($node['id']);
+        unset($node);
+        return $nodes;
+    };
+    return $build(0);
+}
+function categoryDepth(PDO $db, int $categoryId): int
+{
+    $depth = 0;
+    $visited = [];
+    while ($categoryId > 0) {
+        if (isset($visited[$categoryId]))
+            throw new RuntimeException('يوجد تكرار غير صالح في مستويات التصنيفات.');
+        $visited[$categoryId] = true;
+        $row = run($db, 'SELECT parent_id FROM categories WHERE id=?', [$categoryId])->fetch();
+        if (!$row)
+            return 0;
+        $depth++;
+        $categoryId = $row['parent_id'] === null ? 0 : (int)$row['parent_id'];
+    }
+    return $depth;
+}
+function categoryPathFromId(int $categoryId, array $byId): array
+{
+    $path = [];
+    $visited = [];
+    while ($categoryId > 0 && isset($byId[$categoryId]) && !isset($visited[$categoryId]) && count($path) < 3) {
+        $visited[$categoryId] = true;
+        $row = $byId[$categoryId];
+        $path[] = ['id' => (int)$row['id'], 'name' => (string)$row['name']];
+        $categoryId = $row['parent_id'] === null ? 0 : (int)$row['parent_id'];
+    }
+    return array_reverse($path);
+}
+function cleanCategoryName(string $name): string
+{
+    $name = trim($name);
+    $length = preg_match_all('/./us', $name, $matches);
+    if ($name === '' || $length === false || $length > 190 || preg_match('/[\\x00-\\x1F\\x7F]/', $name))
+        throw new RuntimeException('اكتب اسمًا صالحًا للتصنيف (حتى 190 حرفًا).');
+    return $name;
+}
+function createCategoryNode(PDO $db, int $parentId, string $name): int
+{
+    if (!categorySchemaReady($db))
+        throw new RuntimeException('شغّل ملف database/migrations/001_category_hierarchy.sql أولًا.');
+    $name = cleanCategoryName($name);
+    if ($parentId < 0)
+        throw new RuntimeException('التصنيف الأب غير صالح.');
+    $parentValue = null;
+    if ($parentId > 0) {
+        if (categoryDepth($db, $parentId) < 1)
+            throw new RuntimeException('التصنيف الأب غير موجود.');
+        if (categoryDepth($db, $parentId) >= 3)
+            throw new RuntimeException('الحد الأقصى ثلاثة مستويات.');
+        if ((int)run($db, 'SELECT COUNT(*) FROM product_categories WHERE category_id=?', [$parentId])->fetchColumn() > 0)
+            throw new RuntimeException('انقل المنتجات المسندة لهذا التصنيف قبل إضافة مستوى تحته.');
+        $parentValue = $parentId;
+    }
+    if (run($db, 'SELECT id FROM categories WHERE parent_id <=> ? AND name=? LIMIT 1', [$parentValue, $name])->fetchColumn() !== false)
+        throw new RuntimeException('يوجد تصنيف بالاسم نفسه تحت هذا الأب بالفعل.');
+    $sortOrder = $parentValue === null
+        ? (int)$db->query('SELECT COALESCE(MAX(sort_order),0)+1 FROM categories WHERE parent_id IS NULL')->fetchColumn()
+        : (int)run($db, 'SELECT COALESCE(MAX(sort_order),0)+1 FROM categories WHERE parent_id=?', [$parentValue])->fetchColumn();
+    run($db, 'INSERT INTO categories (category_key,parent_id,name,sort_order) VALUES (?,?,?,?)', ['custom-' . bin2hex(random_bytes(12)), $parentValue, $name, $sortOrder]);
+    return (int)$db->lastInsertId();
+}
+function renameCategoryNode(PDO $db, int $categoryId, string $name): void
+{
+    if (!categorySchemaReady($db))
+        throw new RuntimeException('شغّل ملف database/migrations/001_category_hierarchy.sql أولًا.');
+    $name = cleanCategoryName($name);
+    $row = run($db, 'SELECT parent_id FROM categories WHERE id=?', [$categoryId])->fetch();
+    if (!$row)
+        throw new RuntimeException('التصنيف غير موجود.');
+    $parentValue = $row['parent_id'] === null ? null : (int)$row['parent_id'];
+    if (run($db, 'SELECT id FROM categories WHERE parent_id <=> ? AND name=? AND id<>? LIMIT 1', [$parentValue, $name, $categoryId])->fetchColumn() !== false)
+        throw new RuntimeException('يوجد تصنيف بالاسم نفسه تحت هذا الأب بالفعل.');
+    run($db, 'UPDATE categories SET name=? WHERE id=?', [$name, $categoryId]);
+}
+function deleteCategoryNode(PDO $db, int $categoryId): void
+{
+    if (!categorySchemaReady($db))
+        throw new RuntimeException('شغّل ملف database/migrations/001_category_hierarchy.sql أولًا.');
+    if (!run($db, 'SELECT id FROM categories WHERE id=?', [$categoryId])->fetchColumn())
+        throw new RuntimeException('التصنيف غير موجود.');
+    if ((int)run($db, 'SELECT COUNT(*) FROM categories WHERE parent_id=?', [$categoryId])->fetchColumn() > 0)
+        throw new RuntimeException('احذف التصنيفات التابعة أولًا، من المستوى الثالث إلى الأعلى.');
+    if ((int)run($db, 'SELECT COUNT(*) FROM product_categories WHERE category_id=?', [$categoryId])->fetchColumn() > 0)
+        throw new RuntimeException('انقل المنتجات إلى تصنيف آخر أو أزل تصنيفها قبل الحذف.');
+    run($db, 'DELETE FROM categories WHERE id=?', [$categoryId]);
+}
+function assignProductCategory(PDO $db, int $productId, int $categoryId): array
+{
+    if (!categorySchemaReady($db))
+        throw new RuntimeException('شغّل ملف database/migrations/001_category_hierarchy.sql أولًا.');
+    if ($categoryId < 0)
+        throw new RuntimeException('معرف التصنيف غير صالح.');
+    $db->beginTransaction();
+    try {
+        requireProduct($db, $productId);
+        if ($categoryId <= 0) {
+            run($db, 'DELETE FROM product_categories WHERE product_id=?', [$productId]);
+            $categoryId = 0;
+        } else {
+            if (categoryDepth($db, $categoryId) < 1 || categoryDepth($db, $categoryId) > 3)
+                throw new RuntimeException('التصنيف المحدد غير صالح.');
+            if ((int)run($db, 'SELECT COUNT(*) FROM categories WHERE parent_id=?', [$categoryId])->fetchColumn() > 0)
+                throw new RuntimeException('اختر مستوى فرعيًا تابعًا للتصنيف المحدد.');
+            run($db, 'INSERT INTO product_categories (product_id,category_id) VALUES (?,?) ON DUPLICATE KEY UPDATE category_id=VALUES(category_id)', [$productId, $categoryId]);
+        }
+        $updated = run($db, 'UPDATE products SET version=version+1,updated_at=? WHERE id=? AND archived=0', [date('c'), $productId]);
+        if ($updated->rowCount() !== 1)
+            throw new RuntimeException('المنتج غير موجود أو تم نقله للأرشيف.');
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction())
+            $db->rollBack();
+        throw $e;
+    }
+    $rows = categoryRows($db);
+    $byId = [];
+    foreach ($rows as $row)
+        $byId[(int)$row['id']] = $row;
+    $version = (int)run($db, 'SELECT version FROM products WHERE id=?', [$productId])->fetchColumn();
+    return ['category_id' => $categoryId, 'category_path' => categoryPathFromId($categoryId, $byId), 'version' => $version];
 }
 function db(bool $serverOnly = false): PDO
 {
@@ -226,6 +389,17 @@ function saveProduct(PDO $db): int
 function allProducts(PDO $db, bool $archived = false): array
 {
     $rows = run($db, 'SELECT p.*, (SELECT COUNT(*) FROM media m WHERE m.product_id=p.id) AS media_count FROM products p WHERE archived=? ORDER BY id', [(int) $archived])->fetchAll();
+    $categoryByProduct = [];
+    $categoryById = [];
+    $categoryReady = categorySchemaReady($db);
+    if ($rows && $categoryReady) {
+        foreach (categoryRows($db) as $category)
+            $categoryById[(int)$category['id']] = $category;
+        $productIds = array_map(fn($row) => (int)$row['id'], $rows);
+        $placeholders = implode(',', array_fill(0, count($productIds), '?'));
+        foreach (run($db, "SELECT product_id,category_id FROM product_categories WHERE product_id IN ($placeholders)", $productIds)->fetchAll() as $assignment)
+            $categoryByProduct[(int)$assignment['product_id']] = (int)$assignment['category_id'];
+    }
     $counts = [];
     foreach ($rows as $p) {
         $key = strtoupper(trim($p['code']));
@@ -236,6 +410,9 @@ function allProducts(PDO $db, bool $archived = false): array
         $p['group'] = groupCode($p['code']);
         $p['duplicate'] = $p['code'] !== '' && ($counts[strtoupper(trim($p['code']))] ?? 0) > 1;
         $p['incomplete'] = trim($p['code']) === '' || trim($p['description']) === '' || !(int) $p['media_count'];
+        $p['category_ready'] = $categoryReady;
+        $p['category_id'] = $categoryByProduct[(int)$p['id']] ?? 0;
+        $p['category_path'] = categoryPathFromId((int)$p['category_id'], $categoryById);
     }
     unset($p);
     return $rows;
