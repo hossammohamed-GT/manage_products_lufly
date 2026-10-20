@@ -28,6 +28,11 @@ try {
   // الاتصال بالـ database
   echo "🔌 جاري الاتصال بـ MySQL...\n";
   $db = db(); // Normal connection with database selected
+  if (!$db instanceof PDO) {
+    echo "⚠️ وضع الملفات المحلي نشط — هذه الأداة لقواعد البيانات (MySQL/SQLite) فقط.\n";
+    echo "في وضع الملفات، البيانات الحالية هي data/local/catalog.json.php وتُزامَن من lufly_catalog.sql بأداة tools/sync_local_from_sql.py.\n";
+    exit(0);
+  }
 
   // التحقق من وجود المنتجات مسبقاً
   $existingCount = (int) $db->query('SELECT COUNT(*) FROM products')->fetchColumn();

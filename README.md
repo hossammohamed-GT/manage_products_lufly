@@ -45,7 +45,7 @@ http://localhost/lufly/
 ```
 
 **أول مرة هيعمل install تلقائي:**
-- هيعمل database اسمها `lufly_catalog`
+- بوضع `APP_STORAGE=auto` الافتراضي، التشغيل على localhost بيستخدم ملفات JSON محلية (`data/local/`) من غير MySQL — راجع [LOCAL_STORAGE.md](LOCAL_STORAGE.md). ولو عايز MySQL لوكال حط `APP_STORAGE=database` في `.env` وهيعمل database اسمها `lufly_catalog`
 - هيستورد 713 منتج من `data/catalog.json` (بتعديلات الاستضافة وحالات التأكيد)
 - هيستورد 1,495 مرفق (صور ورسومات)
 

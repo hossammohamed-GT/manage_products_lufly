@@ -59,7 +59,7 @@ async function main() {
     php.mkdir('/app/data');
     php.mkdir('/app/uploads');
     php.mkdir('/app/assets/catalog');
-    for (const file of ['app.php', 'config.php', 'index.php', 'login.php', 'includes/sidebar.php', 'includes/image_enhancement.php', 'data/catalog.json', '.env.example']) {
+    for (const file of ['app.php', 'config.php', 'index.php', 'login.php', 'includes/sidebar.php', 'includes/image_enhancement.php', 'includes/catalog_storage.php', 'data/catalog.json', '.env.example']) {
         php.writeFile('/app/' + file, fs.readFileSync(path.join(root, file)));
     }
     php.writeFile('/app/config.local.php', `<?php return ['driver'=>'sqlite','sqlite_path'=>'/app/data/test.sqlite','app_password'=>'integration-test-only'];`);

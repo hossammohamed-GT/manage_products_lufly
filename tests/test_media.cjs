@@ -4,7 +4,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../index.php'), 'utf8');
-const script = source.split('// ═══ LIGHTBOX ═══')[1].split('// ═══ VERIFY SYSTEM ═══')[0];
+const script = source.split('// ═══ LIGHTBOX ═══')[1].split('// ═══ VERIFY SYSTEM ═══')[0]
+    // Simulate database-mode rendering of the server-side storage conditionals:
+    // keep the !isFilesMode() branch and drop the files-mode stubs. The
+    // tempered patterns never cross another PHP tag, so the small button
+    // conditional is resolved before the larger enhancement block.
+    .replace(/<\?php if \(!isFilesMode\(\)\): \?>((?:(?!<\?php)[\s\S])*?)<\?php endif; \?>/g, '$1')
+    .replace(/<\?php if \(!isFilesMode\(\)\): \?>((?:(?!<\?php)[\s\S])*?)<\?php else: \?>(?:(?!<\?php)[\s\S])*?<\?php endif; \?>/g, '$1');
 
 function setup(ids = [41, 42]) {
     const listeners = {};

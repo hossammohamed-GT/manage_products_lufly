@@ -16,8 +16,8 @@ function getGroupIcon(string $prefix): string {
     return $icons[$prefix] ?? 'fa-box';
 }
 
-function getGroups(PDO $db): array {
-    $rows = $db->query('SELECT code FROM products WHERE archived=0')->fetchAll(PDO::FETCH_COLUMN);
+function getGroups(PDO|JsonCatalogStore $db): array {
+    $rows = array_column(catalogRows($db, 'products', ['archived' => 0]), 'code');
     $groups = [];
     foreach ($rows as $code) {
         $prefix = groupCode($code);
@@ -62,14 +62,14 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
     // Get first image for each group
     $d = db();
     $firstImages = [];
-    $stmt = $d->query('SELECT p.id, p.code, (SELECT m.path FROM media m WHERE m.product_id=p.id AND m.previewable=1 ORDER BY m.sort_order,m.id LIMIT 1) AS path FROM products p WHERE p.archived=0 ORDER BY p.id');
-    $seen = [];
-    while ($row = $stmt->fetch()) {
+    $covers = [];
+    foreach (catalogRows($d, 'media', ['previewable' => 1], ['sort_order' => 'ASC', 'id' => 'ASC']) as $m) {
+        if (!isset($covers[(int) $m['product_id']])) $covers[(int) $m['product_id']] = $m['path'];
+    }
+    foreach (catalogRows($d, 'products', ['archived' => 0], ['id' => 'ASC']) as $row) {
         $prefix = groupCode($row['code']);
-        if ($row['path'] && !isset($seen[$prefix])) {
-            $firstImages[$prefix] = $row['path'];
-            $seen[$prefix] = true;
-        }
+        $path = $covers[(int) $row['id']] ?? null;
+        if ($path && !isset($firstImages[$prefix])) $firstImages[$prefix] = $path;
     }
     
     $html = '<div class="sidebar">';

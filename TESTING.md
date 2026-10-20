@@ -20,6 +20,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 npm install --prefix /tmp/lufly-tests @php-wasm/node@3.1.58 @php-wasm/universal@3.1.58 jsdom@26
 LUFLY_TEST_MODULES=/tmp/lufly-tests/node_modules node tests/test_app_integration.cjs
 LUFLY_TEST_MODULES=/tmp/lufly-tests/node_modules LUFLY_TEST_PHP_VERSION=8.1 node tests/test_app_integration.cjs
+LUFLY_TEST_MODULES=/tmp/lufly-tests/node_modules node tests/test_json_storage.cjs
 ```
 
 توجد 31 مجموعة تحقق تشمل:
