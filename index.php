@@ -414,11 +414,19 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .category-node.level-1 { border-right: 4px solid var(--primary); }
 .category-node.level-2 { margin: 8px 22px 0 0; border-right: 3px solid #7cbdba; }
 .category-node.level-3 { margin: 7px 22px 0 0; border-right: 2px solid #d5e8e7; }
-.category-node-name { flex: 1 1 170px; font-weight: 800; }
+.category-node-toggle, .category-node-label { flex: 1 1 220px; min-width: 0; min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 2px; text-align: right; }
+.category-node-toggle { border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.category-node-toggle:hover { color: var(--primary-dark); }
+.category-node-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 5px; }
+.category-node-toggle[aria-expanded="true"] .category-toggle-icon { transform: rotate(180deg); }
+.category-toggle-icon { width: 15px; color: #53677b; font-size: .76rem; transition: transform .12s ease; }
+.category-child-count { border: 1px solid #d4dde6; border-radius: 12px; padding: 2px 7px; background: #fff; color: #53677b; font-size: .7rem; font-weight: 700; white-space: nowrap; }
+.category-node-name { flex: 1 1 100px; font-weight: 800; }
 .category-level-badge { border-radius: 20px; background: var(--primary-light); color: var(--primary-dark); padding: 3px 8px; font-size: .72rem; font-weight: 700; white-space: nowrap; }
 .category-node-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .category-node-actions form { margin: 0; }
-.category-children { padding: 0 10px 10px; }
+.category-children { padding: 0 10px 10px; border-top: 1px solid #e1e7ed; }
+.category-children[hidden] { display: none !important; }
 .category-rename-dialog { width: min(420px, calc(100vw - 32px)); border: 0; border-radius: 14px; padding: 22px; box-shadow: var(--shadow-lg); margin: auto; }
 .category-rename-dialog::backdrop { background: rgba(15, 23, 42, .5); }
 .category-rename-dialog h3 { margin-bottom: 14px; }
@@ -430,121 +438,109 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .category-child-link { background: white; padding: 8px 12px; border: 1px solid var(--border); border-radius: 18px; color: var(--primary-dark); text-decoration: none; font-size: .85rem; font-weight: 700; }
 .category-child-link:hover { background: var(--primary); color: white; }
 
-/* Glassmorphism theme for the category workspace */
-body.category-page {
-    background:
-        radial-gradient(ellipse at 92% 4%, rgba(93, 173, 226, .22), transparent 34%),
-        radial-gradient(ellipse at 5% 24%, rgba(160, 126, 232, .17), transparent 32%),
-        linear-gradient(145deg, #edf5fb 0%, #f4f0fb 52%, #edf8f7 100%);
-    background-attachment: fixed;
+/* Solid, lightweight colors for category pages */
+body.category-page { background: #f3f5f7; }
+body.category-page .top-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: #fff;
+    border-bottom: 1px solid #d9e0e8;
+    box-shadow: 0 2px 8px rgba(35, 49, 66, .08);
 }
-body.category-page .top-header,
-body.category-page .category-intro,
-body.category-page .category-add-panel,
-body.category-page .category-tree-panel,
-body.category-page .category-browser-panel,
-body.category-page .category-rename-dialog,
-body.category-page .toolbar,
-body.category-page .product-card,
-body.category-page .sidebar {
-    background: rgba(255, 255, 255, .66);
-    border: 1px solid rgba(255, 255, 255, .82);
-    box-shadow: 0 16px 42px rgba(47, 67, 97, .13), inset 0 1px 0 rgba(255, 255, 255, .85);
-    backdrop-filter: blur(20px) saturate(155%);
-    -webkit-backdrop-filter: blur(20px) saturate(155%);
-}
-body.category-page .top-header { position: sticky; top: 0; z-index: 100; }
 body.category-page .category-admin {
     padding: clamp(14px, 2vw, 26px);
-    border: 1px solid rgba(255, 255, 255, .68);
-    border-radius: 26px;
-    background: linear-gradient(135deg, rgba(255,255,255,.42), rgba(255,255,255,.19));
-    box-shadow: 0 24px 65px rgba(55, 74, 105, .12), inset 0 1px 0 rgba(255,255,255,.8);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
 }
 body.category-page .category-intro,
 body.category-page .category-add-panel,
 body.category-page .category-tree-panel,
 body.category-page .category-browser-panel {
-    border-radius: 20px;
+    border: 1px solid #d8e0e8;
+    border-radius: 14px;
     padding: clamp(16px, 2vw, 24px);
+    box-shadow: 0 2px 8px rgba(35, 49, 66, .06);
 }
-body.category-page .category-intro { background: linear-gradient(130deg, rgba(255,255,255,.78), rgba(233,246,255,.56)); }
-body.category-page .category-add-panel { background: linear-gradient(130deg, rgba(255,255,255,.76), rgba(237,245,255,.53)); }
-body.category-page .category-tree-panel { background: linear-gradient(140deg, rgba(255,255,255,.76), rgba(244,239,255,.54)); }
+body.category-page .category-intro { background: #fff; }
+body.category-page .category-add-panel { background: #f8fbff; }
+body.category-page .category-tree-panel,
+body.category-page .category-browser-panel { background: #fff; }
 body.category-page .category-intro h2,
 body.category-page .category-add-panel h2,
-body.category-page .category-tree-panel h2 { color: #213b59; letter-spacing: .01em; }
-body.category-page .category-help { color: #53667d; }
+body.category-page .category-tree-panel h2 { color: #263b52; }
+body.category-page .category-help { color: #596b7e; }
 body.category-page .category-form-field input,
 body.category-page .category-form-field select,
 body.category-page .category-rename-input,
 body.category-page .category-select {
-    background: rgba(255,255,255,.64);
-    border: 1px solid rgba(129,157,189,.34);
-    box-shadow: inset 0 1px 5px rgba(52,75,105,.06);
-    backdrop-filter: blur(12px);
+    background: #fff;
+    border: 1px solid #cbd5df;
+    box-shadow: none;
 }
 body.category-page .category-node {
-    border: 1px solid rgba(255,255,255,.82);
-    box-shadow: 0 9px 24px rgba(42,63,94,.10), inset 0 1px 0 rgba(255,255,255,.75);
-    backdrop-filter: blur(14px) saturate(145%);
-    -webkit-backdrop-filter: blur(14px) saturate(145%);
-    transition: transform .18s ease, box-shadow .18s ease;
+    border: 1px solid #d1dae4;
+    box-shadow: 0 1px 3px rgba(35, 49, 66, .06);
+    transition: border-color .12s ease, background-color .12s ease;
 }
-body.category-page .category-node:hover { transform: translateY(-1px); box-shadow: 0 13px 28px rgba(42,63,94,.15); }
+body.category-page .category-node:hover { border-color: #aebdca; }
 body.category-page .category-node.level-1 {
-    --family-color: #16999d;
-    --family-tint: rgba(22,153,157,.13);
+    --family-color: #167f83;
+    --family-tint: #e3f3f2;
     border-right: 5px solid var(--family-color);
-    background: linear-gradient(115deg, rgba(255,255,255,.78), var(--family-tint));
+    background: var(--family-tint);
 }
-body.category-page .category-tree > .category-node.level-1:nth-child(2) { --family-color:#3f9b68; --family-tint:rgba(63,155,104,.13); }
-body.category-page .category-tree > .category-node.level-1:nth-child(3) { --family-color:#8b62cf; --family-tint:rgba(139,98,207,.13); }
-body.category-page .category-tree > .category-node.level-1:nth-child(4) { --family-color:#d17a49; --family-tint:rgba(209,122,73,.14); }
-body.category-page .category-tree > .category-node.level-1:nth-child(5) { --family-color:#397bbd; --family-tint:rgba(57,123,189,.13); }
-body.category-page .category-tree > .category-node.level-1:nth-child(6) { --family-color:#bb5f91; --family-tint:rgba(187,95,145,.13); }
-body.category-page .category-tree > .category-node.level-1:nth-child(7) { --family-color:#5f69bd; --family-tint:rgba(95,105,189,.13); }
-body.category-page .category-tree > .category-node.level-1:nth-child(8) { --family-color:#268bab; --family-tint:rgba(38,139,171,.13); }
-body.category-page .category-tree > .category-node.level-1:nth-child(9) { --family-color:#397f78; --family-tint:rgba(57,127,120,.13); }
+body.category-page .category-tree > .category-node.level-1:nth-child(2) { --family-color:#398054; --family-tint:#e7f4ea; }
+body.category-page .category-tree > .category-node.level-1:nth-child(3) { --family-color:#7551ad; --family-tint:#f0eafb; }
+body.category-page .category-tree > .category-node.level-1:nth-child(4) { --family-color:#a95a35; --family-tint:#fbefe7; }
+body.category-page .category-tree > .category-node.level-1:nth-child(5) { --family-color:#2d68a4; --family-tint:#e8f1fb; }
+body.category-page .category-tree > .category-node.level-1:nth-child(6) { --family-color:#a34f7c; --family-tint:#f8eaf2; }
+body.category-page .category-tree > .category-node.level-1:nth-child(7) { --family-color:#5059a8; --family-tint:#eceefd; }
+body.category-page .category-tree > .category-node.level-1:nth-child(8) { --family-color:#16738b; --family-tint:#e4f4f7; }
+body.category-page .category-tree > .category-node.level-1:nth-child(9) { --family-color:#2e7067; --family-tint:#e6f2f0; }
 body.category-page .category-node.level-2 {
-    border-right: 4px solid #4b91d1;
-    background: linear-gradient(115deg, rgba(255,255,255,.72), rgba(222,239,255,.67));
+    border-right: 4px solid #4b82b6;
+    background: #eaf3fb;
 }
 body.category-page .category-node.level-3 {
-    border-right: 4px solid #986bd1;
-    background: linear-gradient(115deg, rgba(255,255,255,.72), rgba(239,229,255,.7));
+    border-right: 4px solid #825db1;
+    background: #f1ebfa;
 }
-body.category-page .category-node.level-1 .category-level-badge { background: var(--family-tint); color: var(--family-color); }
-body.category-page .category-node.level-2 .category-level-badge { background: rgba(75,145,209,.15); color: #276fae; }
-body.category-page .category-node.level-3 .category-level-badge { background: rgba(152,107,209,.16); color: #7446ab; }
+body.category-page .category-node.level-1 .category-level-badge { background: #fff; color: var(--family-color); }
+body.category-page .category-node.level-2 .category-level-badge { background: #d8e9f7; color: #27618f; }
+body.category-page .category-node.level-3 .category-level-badge { background: #e5d9f3; color: #67468f; }
 body.category-page .category-node-name { color: #243a56; }
 body.category-page .category-action-btn,
 body.category-page .category-submit-btn,
 body.category-page .category-child-link {
-    border: 1px solid rgba(255,255,255,.78);
-    box-shadow: 0 5px 14px rgba(40,62,94,.10), inset 0 1px 0 rgba(255,255,255,.75);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid #d2dbe5;
+    box-shadow: none;
 }
-body.category-page .category-action-btn { background: rgba(255,255,255,.58); color: #314c6b; }
+body.category-page .category-action-btn { background: #fff; color: #314c6b; }
 body.category-page .category-action-btn:hover,
 body.category-page .category-submit-btn:hover,
-body.category-page .category-child-link:hover { transform: translateY(-1px); filter: saturate(1.15); }
-body.category-page .category-submit-btn { background: linear-gradient(135deg, #228f9b, #4c76bd); }
-body.category-page .category-action-btn.danger { background: rgba(255,237,237,.78); color: #c43e53; }
-body.category-page .category-action-btn.danger:hover { background: #c43e53; color: white; }
-body.category-page .category-browser-panel { background: linear-gradient(135deg, rgba(255,255,255,.75), rgba(225,243,251,.58)); }
-body.category-page .category-child-link { background: rgba(255,255,255,.62); }
-body.category-page .category-child-link.level-2 { color: #276fae; border-color: rgba(75,145,209,.34); }
-body.category-page .category-child-link.level-3 { color: #7446ab; border-color: rgba(152,107,209,.35); }
-body.category-page .category-rename-dialog { background: rgba(248,251,255,.88); }
-body.category-page .category-rename-dialog::backdrop { background: rgba(28,44,68,.38); backdrop-filter: blur(5px); }
-body.category-page .category-migration-box { background: rgba(255,249,232,.72); backdrop-filter: blur(16px); }
-body.category-page .product-card { border-radius: 19px; }
+body.category-page .category-child-link:hover { filter: none; }
+body.category-page .category-action-btn:hover { background: #167f83; color: #fff; border-color: #167f83; }
+body.category-page .category-submit-btn { background: #167f83; }
+body.category-page .category-submit-btn:hover { background: #126c70; }
+body.category-page .category-action-btn.danger { background: #fff0f0; color: #c43e53; }
+body.category-page .category-action-btn.danger:hover { background: #c43e53; border-color: #c43e53; color: #fff; }
+body.category-page .category-browser-panel { background: #fff; }
+body.category-page .category-child-link { background: #f8fbff; }
+body.category-page .category-child-link.level-2 { color: #27618f; border-color: #a9c9e3; }
+body.category-page .category-child-link.level-3 { color: #67468f; border-color: #c9b4df; }
+body.category-page .category-child-link:hover { background: #167f83; color: #fff; border-color: #167f83; }
+body.category-page .category-rename-dialog { background: #fff; border: 1px solid #d8e0e8; }
+body.category-page .category-rename-dialog::backdrop { background: rgba(28, 44, 68, .38); }
+body.category-page .category-migration-box { background: #fff7df; }
+body.category-page .product-card,
+body.category-page .sidebar { background: #fff; border: 1px solid #d8e0e8; box-shadow: 0 2px 8px rgba(35, 49, 66, .07); }
+body.category-page .code-badge,
+body.category-page .lightbox-actions { backdrop-filter: none; -webkit-backdrop-filter: none; }
 body.category-page .pagination a,
-body.category-page .pagination .current { backdrop-filter: blur(14px); }
+body.category-page .pagination .current { box-shadow: 0 1px 3px rgba(35, 49, 66, .08); }
 
 /* ═══ FLASH ═══ */
 .flash { background: var(--success); color: white; padding: 12px 18px; border-radius: 10px; margin-bottom: 16px; font-weight: 600; font-size: 0.95rem; }
@@ -1149,6 +1145,32 @@ const categoryTreeData = <?= json_encode($categoryTreeData, JSON_UNESCAPED_UNICO
 <?= $extraJs ?>
 <script>
 const csrfToken = document.querySelector('meta[name="csrf"]')?.content || '';
+
+function setCategoryBranchExpanded(node, expanded) {
+    const toggle = node.querySelector(':scope > .category-node-row > .category-node-toggle[aria-controls]');
+    if (!toggle) return;
+    const children = document.getElementById(toggle.getAttribute('aria-controls'));
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    if (children) children.hidden = !expanded;
+    if (!expanded && children) {
+        Array.from(children.children).forEach(child => {
+            if (child.classList.contains('category-node')) setCategoryBranchExpanded(child, false);
+        });
+    }
+}
+window.toggleCategoryNode = function(button) {
+    const node = button.closest('.category-node');
+    const siblings = node?.parentElement;
+    if (!node || !siblings) return;
+    const expand = button.getAttribute('aria-expanded') !== 'true';
+    if (expand) {
+        Array.from(siblings.children).forEach(sibling => {
+            if (sibling !== node && sibling.classList.contains('category-node'))
+                setCategoryBranchExpanded(sibling, false);
+        });
+    }
+    setCategoryBranchExpanded(node, expand);
+};
 
 function findCategoryNode(id, nodes = categoryTreeData) {
     id = Number(id);
@@ -1999,9 +2021,20 @@ function categoryManagerNodesHtml(array $nodes, int $level = 1): string
     foreach ($nodes as $node) {
         $id = (int)$node['id'];
         $name = (string)$node['name'];
-        $html .= '<section class="category-node level-'.$level.'"><div class="category-node-row">'
-            .'<span class="category-level-badge">'.$levelNames[$level].'</span>'
-            .'<span class="category-node-name">'.h($name).'</span><div class="category-node-actions">'
+        $children = $node['children'] ?? [];
+        $childrenId = 'category-children-'.$id;
+        $html .= '<section class="category-node level-'.$level.'"><div class="category-node-row">';
+        if ($children) {
+            $html .= '<button type="button" class="category-node-toggle" aria-expanded="false" aria-controls="'.$childrenId.'" onclick="toggleCategoryNode(this)">'
+                .'<i class="fas fa-chevron-down category-toggle-icon" aria-hidden="true"></i>'
+                .'<span class="category-level-badge">'.$levelNames[$level].'</span>'
+                .'<span class="category-node-name">'.h($name).'</span>'
+                .'<span class="category-child-count">'.count($children).' فروع</span></button>';
+        } else {
+            $html .= '<div class="category-node-label"><span class="category-level-badge">'.$levelNames[$level].'</span>'
+                .'<span class="category-node-name">'.h($name).'</span></div>';
+        }
+        $html .= '<div class="category-node-actions">'
             .'<a class="category-action-btn" href="?action=category&amp;category_id='.$id.'">عرض المنتجات</a>';
         if ($level < 3)
             $html .= '<button type="button" class="category-action-btn" onclick="selectCategoryParent('.$id.')"><i class="fas fa-plus"></i> إضافة فرعي</button>';
@@ -2010,8 +2043,8 @@ function categoryManagerNodesHtml(array $nodes, int $level = 1): string
             .token().'<input type="hidden" name="operation" value="delete"><input type="hidden" name="category_id" value="'.$id.'">'
             .'<button type="submit" class="category-action-btn danger"><i class="fas fa-trash"></i> حذف</button></form>'
             .'</div></div>';
-        if (!empty($node['children']))
-            $html .= '<div class="category-children">'.categoryManagerNodesHtml($node['children'], $level + 1).'</div>';
+        if ($children)
+            $html .= '<div class="category-children" id="'.$childrenId.'" hidden>'.categoryManagerNodesHtml($children, $level + 1).'</div>';
         $html .= '</section>';
     }
     return $html;
@@ -2062,6 +2095,7 @@ function showCategories(): void
         </section>
         <section class="category-tree-panel">
             <h2>شجرة التصنيفات</h2>
+            <p class="category-help">اضغط على اسم التصنيف لعرض فروعه؛ عند فتح تصنيف آخر تُغلق القائمة السابقة تلقائيًا.</p>
             <?php if ($tree): ?>
                 <div class="category-tree"><?= categoryManagerNodesHtml($tree) ?></div>
             <?php else: ?>
