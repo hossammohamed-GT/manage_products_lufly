@@ -51,8 +51,8 @@ async function main() {
     });
     await check('files mode boots from catalog without MySQL/SQLite and keeps the seed immutable',async()=>{
         assert.equal(await evaluate("echo json_encode($d instanceof JsonCatalogStore);"),true);
-        assert.equal(await evaluate("echo json_encode(count(catalogRows($d,'products')));"),715);
-        assert.equal(await evaluate("echo json_encode(count(catalogRows($d,'media')));"),1465);
+        assert.equal(await evaluate("echo json_encode(count(catalogRows($d,'products')));"),713);
+        assert.equal(await evaluate("echo json_encode(count(catalogRows($d,'media')));"),1495);
         assert.deepEqual(Buffer.from(php.readFileAsBuffer('/app/data/catalog.json')),fs.readFileSync(path.join(root,'data/catalog.json')));
         assert.equal(php.readFileAsText('/app/data/old.sqlite'),'Existing database must never be opened, rewritten or removed');
         assert.equal(php.fileExists('/app/data/lufly.sqlite'),false);

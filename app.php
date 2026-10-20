@@ -144,8 +144,10 @@ function install(): void
             throw new RuntimeException('تم التثبيت بالفعل. لن تتم إعادة استيراد أو استبدال بياناتك.');
         $seed = json_decode(file_get_contents(__DIR__ . '/data/catalog.json'), true, 512, JSON_THROW_ON_ERROR);
         $now = date('c');
+        // Preserve hosting edits carried by the seed (archived/verified/version/timestamps);
+        // fall back to fresh-install defaults for older seed files that lack them.
         foreach ($seed['products'] as $p)
-            run($db, 'INSERT INTO products (id,code,brand,status,description,notes,source_file,source_row,source_extra,verified,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [$p['id'], $p['code'], $p['brand'], $p['status'], $p['description'], $p['notes'], $p['source_file'], $p['source_row'], $p['source_extra'], 0, $now, $now]);
+            run($db, 'INSERT INTO products (id,code,brand,status,description,notes,source_file,source_row,source_extra,archived,verified,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [$p['id'], $p['code'], $p['brand'], $p['status'], $p['description'], $p['notes'], $p['source_file'], $p['source_row'], $p['source_extra'], (int) ($p['archived'] ?? 0), (int) ($p['verified'] ?? 0), max(1, (int) ($p['version'] ?? 1)), $p['created_at'] ?? $now, $p['updated_at'] ?? $now]);
         foreach ($seed['media'] as $m)
             run($db, 'INSERT INTO media (id,product_id,path,original_name,kind,caption,sort_order,previewable,source_column,source_row,sha256) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [$m['id'], $m['product_id'], $m['path'], $m['original_name'], $m['kind'], $m['caption'], $m['sort_order'], (int) $m['previewable'], $m['source_column'], $m['source_row'], $m['sha256']]);
         setSetting($db, 'installed', '1');

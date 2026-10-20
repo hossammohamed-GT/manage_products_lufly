@@ -96,9 +96,11 @@ try {
   // استيراد المنتجات
   echo "   📦 استيراد {$productCount} منتج...\n";
   $insertProduct = $db->prepare('
-        INSERT INTO products (id, code, brand, status, description, notes, source_file, source_row, source_extra, verified, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NOW(), NOW())
+        INSERT INTO products (id, code, brand, status, description, notes, source_file, source_row, source_extra, archived, verified, version, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ');
+  // نحافظ على تعديلات الاستضافة الموجودة في catalog.json (archived/verified/version/التواريخ)
+  $now = date('c');
 
   foreach ($data['products'] as $index => $product) {
     $insertProduct->execute([
@@ -110,7 +112,12 @@ try {
       $product['notes'],
       $product['source_file'],
       $product['source_row'],
-      $product['source_extra']
+      $product['source_extra'],
+      (int) ($product['archived'] ?? 0),
+      (int) ($product['verified'] ?? 0),
+      max(1, (int) ($product['version'] ?? 1)),
+      $product['created_at'] ?? $now,
+      $product['updated_at'] ?? $now
     ]);
 
     if (($index + 1) % 100 === 0) {

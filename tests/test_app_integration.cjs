@@ -80,7 +80,7 @@ async function main() {
         assert.ok(response.text.trimStart().startsWith('<!DOCTYPE html>'));
         csrf = response.text.match(/<meta name="csrf" content="([a-f0-9]+)"/)[1];
         assert.equal(csrf.length, 64);
-        assert.equal(await evaluate("echo json_encode((int)$d->query('SELECT COUNT(*) FROM products')->fetchColumn());"), 715);
+        assert.equal(await evaluate("echo json_encode((int)$d->query('SELECT COUNT(*) FROM products')->fetchColumn());"), 713);
     });
     await check('all PHP entry files pass syntax parsing', async () => {
         for (const file of ['app.php', 'config.php', 'index.php', 'login.php', 'includes/sidebar.php', 'includes/image_enhancement.php']) {
