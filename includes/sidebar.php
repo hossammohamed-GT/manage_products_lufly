@@ -27,6 +27,31 @@ function getGroups(PDO $db): array {
     return $groups;
 }
 
+function getPrimaryCategoryGroups(PDO $db): array {
+    if (!categorySchemaReady($db)) return [];
+    $rows = categoryRows($db);
+    $byId = [];
+    $roots = [];
+    foreach ($rows as $row) {
+        $id = (int)$row['id'];
+        $parentId = $row['parent_id'] === null ? 0 : (int)$row['parent_id'];
+        $byId[$id] = ['parent_id' => $parentId];
+        if ($parentId === 0)
+            $roots[$id] = ['id' => $id, 'name' => (string)$row['name'], 'count' => 0];
+    }
+    if (!$roots) return [];
+    foreach (run($db, 'SELECT pc.category_id FROM product_categories pc JOIN products p ON p.id=pc.product_id WHERE p.archived=0')->fetchAll(PDO::FETCH_COLUMN) as $assignedId) {
+        $categoryId = (int)$assignedId;
+        $visited = [];
+        while (isset($byId[$categoryId]) && $byId[$categoryId]['parent_id'] > 0 && !isset($visited[$categoryId])) {
+            $visited[$categoryId] = true;
+            $categoryId = $byId[$categoryId]['parent_id'];
+        }
+        if (isset($roots[$categoryId])) $roots[$categoryId]['count']++;
+    }
+    return array_values($roots);
+}
+
 function getGroupCategories(array $groups): array {
     $categories = [
         'WC & Toilets' => [],
@@ -54,13 +79,24 @@ function getGroupCategories(array $groups): array {
     return array_filter($categories, fn($g) => !empty($g));
 }
 
-function renderSidebar(array $groups, string $activePrefix = ''): string {
+function renderSidebar(array $groups, string $activePrefix = '', int $activeCategoryId = 0): string {
     $activePrefix = (string)$activePrefix;
     $categories = getGroupCategories($groups);
     $totalProducts = array_sum($groups);
-    
-    // Get first image for each group
     $d = db();
+    $primaryCategories = getPrimaryCategoryGroups($d);
+    $categoryRows = categoryRows($d);
+    $categoryById = [];
+    foreach ($categoryRows as $row) $categoryById[(int)$row['id']] = $row;
+    $activeRootId = $activeCategoryId;
+    $visited = [];
+    while ($activeRootId > 0 && isset($categoryById[$activeRootId]) && $categoryById[$activeRootId]['parent_id'] !== null && !isset($visited[$activeRootId])) {
+        $visited[$activeRootId] = true;
+        $activeRootId = (int)$categoryById[$activeRootId]['parent_id'];
+    }
+    $activeMode = $activeRootId > 0 ? 'category' : 'code';
+
+    // Get first image for each code group.
     $firstImages = [];
     $stmt = $d->query('SELECT p.id, p.code, m.path FROM products p JOIN media m ON m.product_id=p.id WHERE p.archived=0 AND m.previewable=1 ORDER BY p.id,m.sort_order,m.id');
     $seen = [];
@@ -71,15 +107,19 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
             $seen[$prefix] = true;
         }
     }
-    
-    $html = '<div class="sidebar">';
+
+    $html = '<div class="sidebar" data-active-mode="'.h($activeMode).'">';
     $html .= '<div class="sidebar-header">';
     $html .= '<div class="sidebar-title"><i class="fas fa-folder-open"></i> استكشف المنتجات</div>';
-    $html .= '<div class="sidebar-total">' . $totalProducts . ' منتج في ' . count($groups) . ' مجموعة</div>';
+    $html .= '<div class="sidebar-total">'.$totalProducts.' منتج · '.count($groups).' مجموعة كود · '.count($primaryCategories).' تصنيف رئيسي</div>';
     $html .= '</div>';
-    
-    $html .= '<div class="sidebar-search-wrap"><input type="text" class="sidebar-search" placeholder="ابحث في المجموعات..." id="sidebarSearch"></div>';
-    
+    $html .= '<div class="sidebar-mode-switch" role="group" aria-label="طريقة تصنيف المنتجات">'
+        .'<button type="button" class="sidebar-mode-btn '.($activeMode === 'code' ? 'active' : '').'" data-sidebar-mode="code" aria-pressed="'.($activeMode === 'code' ? 'true' : 'false').'"><i class="fas fa-hashtag"></i> حسب الكود</button>'
+        .'<button type="button" class="sidebar-mode-btn '.($activeMode === 'category' ? 'active' : '').'" data-sidebar-mode="category" aria-pressed="'.($activeMode === 'category' ? 'true' : 'false').'"><i class="fas fa-layer-group"></i> حسب التصنيف</button>'
+        .'</div>';
+    $html .= '<div class="sidebar-search-wrap"><input type="text" class="sidebar-search" placeholder="ابحث في الكود أو التصنيف..." id="sidebarSearch"></div>';
+    $html .= '<div class="sidebar-views">';
+    $html .= '<div class="sidebar-view" id="sidebarCodeView" style="'.($activeMode === 'code' ? '' : 'display:none').'">';
     $html .= '<div class="sidebar-categories">';
     foreach ($categories as $catName => $catGroups) {
         $catId = 'cat-' . preg_replace('/[^a-z]/', '', strtolower($catName));
@@ -95,22 +135,32 @@ function renderSidebar(array $groups, string $activePrefix = ''): string {
             $icon = getGroupIcon((string)$prefix);
             $thumb = $firstImages[(string)$prefix] ?? '';
             $html .= '<a href="?action=group&amp;prefix=' . rawurlencode((string)$prefix) . '" class="sidebar-group ' . ($isActive ? 'active' : '') . '" data-prefix="' . h((string)$prefix) . '">';
-            if ($thumb) {
-                $html .= '<img src="' . h($thumb) . '" class="sidebar-thumb" alt="">';
-            } else {
-                $html .= '<i class="fas ' . $icon . ' group-icon"></i>';
-            }
-            $html .= '<span class="group-name">' . h((string)$prefix) . '</span>';
-            $html .= '<span class="group-count">' . $count . '</span>';
-            $html .= '</a>';
+            if ($thumb) $html .= '<img src="' . h($thumb) . '" class="sidebar-thumb" alt="">';
+            else $html .= '<i class="fas ' . $icon . ' group-icon"></i>';
+            $html .= '<span class="group-name">' . h((string)$prefix) . '</span><span class="group-count">' . $count . '</span></a>';
         }
         $html .= '</div></div>';
     }
-    $html .= '</div>';
-    
-    $html .= '<div class="sidebar-footer">';
-    $html .= '<a href="?action=home" class="sidebar-all-btn"><i class="fas fa-home"></i> عرض كل المنتجات</a>';
-    $html .= '</div>';
+    $html .= '</div></div>';
+
+    $html .= '<div class="sidebar-view" id="sidebarPrimaryView" style="'.($activeMode === 'category' ? '' : 'display:none').'">';
+    if ($primaryCategories) {
+        $html .= '<div class="sidebar-primary-list">';
+        foreach ($primaryCategories as $category) {
+            $id = (int)$category['id'];
+            $name = (string)$category['name'];
+            $isActive = $id === $activeRootId;
+            $html .= '<a href="?action=category&amp;category_id='.$id.'" class="sidebar-primary-group '.($isActive ? 'active' : '').'" data-category-name="'.h($name).'" '.($isActive ? 'aria-current="page"' : '').'>'
+                .'<span class="sidebar-primary-icon"><i class="fas fa-layer-group"></i></span>'
+                .'<span class="sidebar-primary-name">'.h($name).'</span>'
+                .'<span class="group-count">'.(int)$category['count'].'</span></a>';
+        }
+        $html .= '</div>';
+    } else {
+        $html .= '<div class="sidebar-category-empty"><i class="fas fa-circle-info"></i><p>شغّل ترحيل التصنيفات لعرض المجموعات الرئيسية.</p><a href="?action=categories">إعداد التصنيفات</a></div>';
+    }
+    $html .= '</div></div>';
+    $html .= '<div class="sidebar-footer"><a href="?action=home" class="sidebar-all-btn"><i class="fas fa-home"></i> عرض كل المنتجات</a></div>';
     $html .= '</div>';
     return $html;
 }
@@ -146,6 +196,26 @@ function sidebarAssets(): void {
     font-size: 0.8rem;
     opacity: 0.9;
 }
+.sidebar-mode-switch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding: 10px 12px 0;
+}
+.sidebar-mode-btn {
+    padding: 9px 7px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: #f5f7fa;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: .78rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all .18s ease;
+}
+.sidebar-mode-btn:hover { border-color: var(--primary); color: var(--primary); }
+.sidebar-mode-btn.active { background: var(--primary); border-color: var(--primary); color: white; box-shadow: 0 4px 12px rgba(31,158,158,.22); }
 .sidebar-search-wrap {
     padding: 12px;
     border-bottom: 1px solid var(--border);
@@ -164,13 +234,11 @@ function sidebarAssets(): void {
 }
 .sidebar-search:focus { border-color: var(--primary); }
 
-.sidebar-categories {
-    flex: 1;
-    overflow-y: auto;
-    padding: 8px 0;
-}
-.sidebar-categories::-webkit-scrollbar { width: 5px; }
-.sidebar-categories::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 3px; }
+.sidebar-views { flex: 1; min-height: 0; overflow: hidden; }
+.sidebar-view { height: 100%; overflow-y: auto; }
+.sidebar-view::-webkit-scrollbar { width: 5px; }
+.sidebar-view::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 3px; }
+.sidebar-categories { padding: 8px 0; }
 
 .sidebar-category {
     border-bottom: 1px solid #f0f0f0;
@@ -200,6 +268,42 @@ function sidebarAssets(): void {
 .sidebar-cat-items {
     background: #fafbfc;
 }
+.sidebar-primary-list { display: grid; gap: 8px; padding: 10px; }
+.sidebar-primary-group {
+    --root-color: #15999d;
+    --root-tint: rgba(21,153,157,.10);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 7px 10px;
+    border: 1px solid rgba(255,255,255,.8);
+    border-right: 4px solid var(--root-color);
+    border-radius: 11px;
+    background: linear-gradient(115deg, rgba(255,255,255,.78), var(--root-tint));
+    color: var(--text);
+    text-decoration: none;
+    box-shadow: 0 4px 12px rgba(38,55,82,.07);
+    transition: all .17s ease;
+}
+.sidebar-primary-group:nth-child(2) { --root-color:#3f9b68; --root-tint:rgba(63,155,104,.11); }
+.sidebar-primary-group:nth-child(3) { --root-color:#8b62cf; --root-tint:rgba(139,98,207,.11); }
+.sidebar-primary-group:nth-child(4) { --root-color:#d17a49; --root-tint:rgba(209,122,73,.12); }
+.sidebar-primary-group:nth-child(5) { --root-color:#397bbd; --root-tint:rgba(57,123,189,.11); }
+.sidebar-primary-group:nth-child(6) { --root-color:#bb5f91; --root-tint:rgba(187,95,145,.11); }
+.sidebar-primary-group:nth-child(7) { --root-color:#5f69bd; --root-tint:rgba(95,105,189,.11); }
+.sidebar-primary-group:nth-child(8) { --root-color:#268bab; --root-tint:rgba(38,139,171,.11); }
+.sidebar-primary-group:nth-child(9) { --root-color:#397f78; --root-tint:rgba(57,127,120,.11); }
+.sidebar-primary-group:hover { transform: translateX(-2px); box-shadow: 0 7px 16px rgba(38,55,82,.12); }
+.sidebar-primary-group.active { background: linear-gradient(130deg, var(--root-color), var(--primary-dark)); color: white; }
+.sidebar-primary-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--root-tint); color: var(--root-color); flex: 0 0 auto; }
+.sidebar-primary-group.active .sidebar-primary-icon { background: rgba(255,255,255,.2); color: white; }
+.sidebar-primary-name { flex: 1; min-width: 0; font-size: .84rem; font-weight: 700; }
+.sidebar-primary-group .group-count { background: rgba(255,255,255,.7); color: var(--root-color); }
+.sidebar-primary-group.active .group-count { background: rgba(255,255,255,.28); color: white; }
+.sidebar-category-empty { padding: 24px 18px; color: var(--text-muted); text-align: center; font-size: .83rem; }
+.sidebar-category-empty i { color: var(--primary); font-size: 1.4rem; }
+.sidebar-category-empty a { display: inline-block; margin-top: 6px; color: var(--primary-dark); font-weight: 700; }
 .sidebar-group {
     display: flex;
     align-items: center;
@@ -284,7 +388,27 @@ document.querySelectorAll('.sidebar-cat-btn').forEach(btn => {
     });
 });
 
-// Sidebar search filter
+// Switch between the existing code groups and the nine primary category groups.
+const sidebarRoot = document.querySelector('.sidebar');
+if (sidebarRoot) {
+    const codeView = document.getElementById('sidebarCodeView');
+    const categoryView = document.getElementById('sidebarPrimaryView');
+    const modeButtons = sidebarRoot.querySelectorAll('[data-sidebar-mode]');
+    const setSidebarMode = mode => {
+        const showCategories = mode === 'category';
+        codeView.style.display = showCategories ? 'none' : 'block';
+        categoryView.style.display = showCategories ? 'block' : 'none';
+        modeButtons.forEach(button => {
+            const active = button.dataset.sidebarMode === mode;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+    };
+    setSidebarMode(sidebarRoot.dataset.activeMode || 'code');
+    modeButtons.forEach(button => button.addEventListener('click', () => setSidebarMode(button.dataset.sidebarMode)));
+}
+
+// Sidebar search filters whichever grouping is visible.
 const sidebarSearch = document.getElementById('sidebarSearch');
 if (sidebarSearch) {
     sidebarSearch.addEventListener('input', function(e) {
@@ -292,6 +416,10 @@ if (sidebarSearch) {
         document.querySelectorAll('.sidebar-group').forEach(el => {
             const prefix = el.getAttribute('data-prefix').toLowerCase();
             el.style.display = prefix.includes(query) ? 'flex' : 'none';
+        });
+        document.querySelectorAll('.sidebar-primary-group').forEach(el => {
+            const name = (el.getAttribute('data-category-name') || el.textContent).toLowerCase();
+            el.style.display = name.includes(query) ? 'flex' : 'none';
         });
     });
 }

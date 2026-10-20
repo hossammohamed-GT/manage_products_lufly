@@ -142,8 +142,6 @@ function createCategoryNode(PDO $db, int $parentId, string $name): int
             throw new RuntimeException('التصنيف الأب غير موجود.');
         if (categoryDepth($db, $parentId) >= 3)
             throw new RuntimeException('الحد الأقصى ثلاثة مستويات.');
-        if ((int)run($db, 'SELECT COUNT(*) FROM product_categories WHERE category_id=?', [$parentId])->fetchColumn() > 0)
-            throw new RuntimeException('انقل المنتجات المسندة لهذا التصنيف قبل إضافة مستوى تحته.');
         $parentValue = $parentId;
     }
     if (run($db, 'SELECT id FROM categories WHERE parent_id <=> ? AND name=? LIMIT 1', [$parentValue, $name])->fetchColumn() !== false)
@@ -194,8 +192,6 @@ function assignProductCategory(PDO $db, int $productId, int $categoryId): array
         } else {
             if (categoryDepth($db, $categoryId) < 1 || categoryDepth($db, $categoryId) > 3)
                 throw new RuntimeException('التصنيف المحدد غير صالح.');
-            if ((int)run($db, 'SELECT COUNT(*) FROM categories WHERE parent_id=?', [$categoryId])->fetchColumn() > 0)
-                throw new RuntimeException('اختر مستوى فرعيًا تابعًا للتصنيف المحدد.');
             run($db, 'INSERT INTO product_categories (product_id,category_id) VALUES (?,?) ON DUPLICATE KEY UPDATE category_id=VALUES(category_id)', [$productId, $categoryId]);
         }
         $updated = run($db, 'UPDATE products SET version=version+1,updated_at=? WHERE id=? AND archived=0', [date('c'), $productId]);

@@ -292,8 +292,8 @@ function layout(string $title, string $content, array $groups = [], string $extr
     $flashType = $_SESSION['flash_type'] ?? 'success';
     unset($_SESSION['flash'], $_SESSION['flash_type']);
     $categoryTreeData = $d && categorySchemaReady($d) ? categoryTree($d) : [];
-    $sidebarHtml = $d && !in_array($action, ['categories', 'category'], true)
-        ? renderSidebar($groups, (string)($_GET['prefix'] ?? ''))
+    $sidebarHtml = $d && $action !== 'categories'
+        ? renderSidebar($groups, (string)($_GET['prefix'] ?? ''), (int)($_GET['category_id'] ?? 0))
         : '';
     ?>
 <!DOCTYPE html>
@@ -429,6 +429,122 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .category-child-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 20px; }
 .category-child-link { background: white; padding: 8px 12px; border: 1px solid var(--border); border-radius: 18px; color: var(--primary-dark); text-decoration: none; font-size: .85rem; font-weight: 700; }
 .category-child-link:hover { background: var(--primary); color: white; }
+
+/* Glassmorphism theme for the category workspace */
+body.category-page {
+    background:
+        radial-gradient(ellipse at 92% 4%, rgba(93, 173, 226, .22), transparent 34%),
+        radial-gradient(ellipse at 5% 24%, rgba(160, 126, 232, .17), transparent 32%),
+        linear-gradient(145deg, #edf5fb 0%, #f4f0fb 52%, #edf8f7 100%);
+    background-attachment: fixed;
+}
+body.category-page .top-header,
+body.category-page .category-intro,
+body.category-page .category-add-panel,
+body.category-page .category-tree-panel,
+body.category-page .category-browser-panel,
+body.category-page .category-rename-dialog,
+body.category-page .toolbar,
+body.category-page .product-card,
+body.category-page .sidebar {
+    background: rgba(255, 255, 255, .66);
+    border: 1px solid rgba(255, 255, 255, .82);
+    box-shadow: 0 16px 42px rgba(47, 67, 97, .13), inset 0 1px 0 rgba(255, 255, 255, .85);
+    backdrop-filter: blur(20px) saturate(155%);
+    -webkit-backdrop-filter: blur(20px) saturate(155%);
+}
+body.category-page .top-header { position: sticky; top: 0; z-index: 100; }
+body.category-page .category-admin {
+    padding: clamp(14px, 2vw, 26px);
+    border: 1px solid rgba(255, 255, 255, .68);
+    border-radius: 26px;
+    background: linear-gradient(135deg, rgba(255,255,255,.42), rgba(255,255,255,.19));
+    box-shadow: 0 24px 65px rgba(55, 74, 105, .12), inset 0 1px 0 rgba(255,255,255,.8);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+body.category-page .category-intro,
+body.category-page .category-add-panel,
+body.category-page .category-tree-panel,
+body.category-page .category-browser-panel {
+    border-radius: 20px;
+    padding: clamp(16px, 2vw, 24px);
+}
+body.category-page .category-intro { background: linear-gradient(130deg, rgba(255,255,255,.78), rgba(233,246,255,.56)); }
+body.category-page .category-add-panel { background: linear-gradient(130deg, rgba(255,255,255,.76), rgba(237,245,255,.53)); }
+body.category-page .category-tree-panel { background: linear-gradient(140deg, rgba(255,255,255,.76), rgba(244,239,255,.54)); }
+body.category-page .category-intro h2,
+body.category-page .category-add-panel h2,
+body.category-page .category-tree-panel h2 { color: #213b59; letter-spacing: .01em; }
+body.category-page .category-help { color: #53667d; }
+body.category-page .category-form-field input,
+body.category-page .category-form-field select,
+body.category-page .category-rename-input,
+body.category-page .category-select {
+    background: rgba(255,255,255,.64);
+    border: 1px solid rgba(129,157,189,.34);
+    box-shadow: inset 0 1px 5px rgba(52,75,105,.06);
+    backdrop-filter: blur(12px);
+}
+body.category-page .category-node {
+    border: 1px solid rgba(255,255,255,.82);
+    box-shadow: 0 9px 24px rgba(42,63,94,.10), inset 0 1px 0 rgba(255,255,255,.75);
+    backdrop-filter: blur(14px) saturate(145%);
+    -webkit-backdrop-filter: blur(14px) saturate(145%);
+    transition: transform .18s ease, box-shadow .18s ease;
+}
+body.category-page .category-node:hover { transform: translateY(-1px); box-shadow: 0 13px 28px rgba(42,63,94,.15); }
+body.category-page .category-node.level-1 {
+    --family-color: #16999d;
+    --family-tint: rgba(22,153,157,.13);
+    border-right: 5px solid var(--family-color);
+    background: linear-gradient(115deg, rgba(255,255,255,.78), var(--family-tint));
+}
+body.category-page .category-tree > .category-node.level-1:nth-child(2) { --family-color:#3f9b68; --family-tint:rgba(63,155,104,.13); }
+body.category-page .category-tree > .category-node.level-1:nth-child(3) { --family-color:#8b62cf; --family-tint:rgba(139,98,207,.13); }
+body.category-page .category-tree > .category-node.level-1:nth-child(4) { --family-color:#d17a49; --family-tint:rgba(209,122,73,.14); }
+body.category-page .category-tree > .category-node.level-1:nth-child(5) { --family-color:#397bbd; --family-tint:rgba(57,123,189,.13); }
+body.category-page .category-tree > .category-node.level-1:nth-child(6) { --family-color:#bb5f91; --family-tint:rgba(187,95,145,.13); }
+body.category-page .category-tree > .category-node.level-1:nth-child(7) { --family-color:#5f69bd; --family-tint:rgba(95,105,189,.13); }
+body.category-page .category-tree > .category-node.level-1:nth-child(8) { --family-color:#268bab; --family-tint:rgba(38,139,171,.13); }
+body.category-page .category-tree > .category-node.level-1:nth-child(9) { --family-color:#397f78; --family-tint:rgba(57,127,120,.13); }
+body.category-page .category-node.level-2 {
+    border-right: 4px solid #4b91d1;
+    background: linear-gradient(115deg, rgba(255,255,255,.72), rgba(222,239,255,.67));
+}
+body.category-page .category-node.level-3 {
+    border-right: 4px solid #986bd1;
+    background: linear-gradient(115deg, rgba(255,255,255,.72), rgba(239,229,255,.7));
+}
+body.category-page .category-node.level-1 .category-level-badge { background: var(--family-tint); color: var(--family-color); }
+body.category-page .category-node.level-2 .category-level-badge { background: rgba(75,145,209,.15); color: #276fae; }
+body.category-page .category-node.level-3 .category-level-badge { background: rgba(152,107,209,.16); color: #7446ab; }
+body.category-page .category-node-name { color: #243a56; }
+body.category-page .category-action-btn,
+body.category-page .category-submit-btn,
+body.category-page .category-child-link {
+    border: 1px solid rgba(255,255,255,.78);
+    box-shadow: 0 5px 14px rgba(40,62,94,.10), inset 0 1px 0 rgba(255,255,255,.75);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+body.category-page .category-action-btn { background: rgba(255,255,255,.58); color: #314c6b; }
+body.category-page .category-action-btn:hover,
+body.category-page .category-submit-btn:hover,
+body.category-page .category-child-link:hover { transform: translateY(-1px); filter: saturate(1.15); }
+body.category-page .category-submit-btn { background: linear-gradient(135deg, #228f9b, #4c76bd); }
+body.category-page .category-action-btn.danger { background: rgba(255,237,237,.78); color: #c43e53; }
+body.category-page .category-action-btn.danger:hover { background: #c43e53; color: white; }
+body.category-page .category-browser-panel { background: linear-gradient(135deg, rgba(255,255,255,.75), rgba(225,243,251,.58)); }
+body.category-page .category-child-link { background: rgba(255,255,255,.62); }
+body.category-page .category-child-link.level-2 { color: #276fae; border-color: rgba(75,145,209,.34); }
+body.category-page .category-child-link.level-3 { color: #7446ab; border-color: rgba(152,107,209,.35); }
+body.category-page .category-rename-dialog { background: rgba(248,251,255,.88); }
+body.category-page .category-rename-dialog::backdrop { background: rgba(28,44,68,.38); backdrop-filter: blur(5px); }
+body.category-page .category-migration-box { background: rgba(255,249,232,.72); backdrop-filter: blur(16px); }
+body.category-page .product-card { border-radius: 19px; }
+body.category-page .pagination a,
+body.category-page .pagination .current { backdrop-filter: blur(14px); }
 
 /* ═══ FLASH ═══ */
 .flash { background: var(--success); color: white; padding: 12px 18px; border-radius: 10px; margin-bottom: 16px; font-weight: 600; font-size: 0.95rem; }
@@ -937,7 +1053,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 @media (max-width: 900px) { .sidebar { display: none; } }
 </style>
 </head>
-<body>
+<body class="<?= in_array($action, ['categories', 'category'], true) ? 'category-page' : '' ?>">
 
 <!-- ═══ TOP HEADER ═══ -->
 <div class="top-header">
@@ -947,7 +1063,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     </a>
     <nav class="top-nav">
         <a href="?action=home" class="<?= in_array($action, ['home','group','search','category'], true) ? 'active' : '' ?>">المنتجات</a>
-        <a href="?action=categories" class="<?= $action === 'categories' ? 'active' : '' ?>">التصنيفات</a>
+        <a href="?action=categories" class="<?= in_array($action, ['categories', 'category'], true) ? 'active' : '' ?>">التصنيفات</a>
         <a href="?action=archive_list" class="<?= $action === 'archive_list' ? 'active' : '' ?>">الأرشيف</a>
         <a href="?action=settings" class="<?= $action === 'settings' ? 'active' : '' ?>">الإعدادات</a>
     </nav>
@@ -1071,35 +1187,28 @@ function refreshCategoryEditor(editor) {
     const {level1, level2, level3, save} = categoryEditorElements(editor);
     const first = findCategoryNode(level1.value);
     const second = findCategoryNode(level2.value);
+    const third = findCategoryNode(level3.value);
     if (!level1.value) {
         level2.disabled = true;
         level3.disabled = true;
         editor.dataset.selectedCategoryId = '0';
         save.disabled = false;
-    } else if (!first) {
-        editor.dataset.selectedCategoryId = '';
-        save.disabled = true;
-    } else if (!(first.children || []).length) {
-        level2.disabled = true;
-        level3.disabled = true;
-        editor.dataset.selectedCategoryId = String(first.id);
-        save.disabled = false;
-    } else if (!level2.value || !second) {
-        level3.disabled = true;
-        editor.dataset.selectedCategoryId = '';
-        save.disabled = true;
-    } else if (!(second.children || []).length) {
-        level3.disabled = true;
-        editor.dataset.selectedCategoryId = String(second.id);
-        save.disabled = false;
-    } else if (!level3.value) {
-        editor.dataset.selectedCategoryId = '';
-        save.disabled = true;
-    } else {
-        const third = findCategoryNode(level3.value);
-        editor.dataset.selectedCategoryId = third ? String(third.id) : '';
-        save.disabled = !third;
+        return;
     }
+    if (!first) {
+        editor.dataset.selectedCategoryId = '';
+        save.disabled = true;
+        return;
+    }
+    editor.dataset.selectedCategoryId = String(first.id);
+    save.disabled = false;
+    level2.disabled = !(first.children || []).length;
+    level3.disabled = true;
+    if (!level2.value || !second || !(first.children || []).some(node => Number(node.id) === Number(second.id))) return;
+    editor.dataset.selectedCategoryId = String(second.id);
+    level3.disabled = !(second.children || []).length;
+    if (level3.value && third && (second.children || []).some(node => Number(node.id) === Number(third.id)))
+        editor.dataset.selectedCategoryId = String(third.id);
 }
 window.openCategoryEditor = function(button, productId) {
     const card = button.closest('.product-card');
@@ -1910,8 +2019,8 @@ function categoryManagerNodesHtml(array $nodes, int $level = 1): string
 function categoryMigrationNotice(): string
 {
     return '<div class="category-migration-box"><h2>تفعيل التصنيفات</h2>'
-        .'<p>شغّل الملف <code>database/migrations/001_category_hierarchy.sql</code> مرة واحدة على قاعدة بيانات الكتالوج الحالية. الملف يضيف الجداول وشجرة التصنيفات فقط، ولا يمسح أو يعدّل المنتجات أو الصور.</p>'
-        .'<p>بعد تشغيله، حدّث الصفحة لتظهر مستويات Bathroom وKitchen وKids وغيرها وتبدأ في إسناد المنتجات.</p></div>';
+        .'<p>شغّل الملف <code>database/migrations/001_category_hierarchy.sql</code> أولًا لإنشاء الشجرة. بعده يمكنك تشغيل <code>database/migrations/002_primary_category_defaults.sql</code> لإضافة التصنيفات الرئيسية المبدئية للمنتجات الموجودة.</p>'
+        .'<p>الملف الثاني يضيف تعيينات التصنيف فقط، ولا يغيّر بيانات المنتجات أو الصور. حدّث الصفحة بعد تشغيل الملفات.</p></div>';
 }
 function showCategories(): void
 {
@@ -1928,8 +2037,8 @@ function showCategories(): void
     <div class="category-admin">
         <section class="category-intro">
             <h2>تصنيفات المنتجات — ثلاثة مستويات</h2>
-            <p>رتّب الكتالوج من التصنيف الرئيسي إلى الفرعي ثم الفرعي الثالث. المنتجات تُسند إلى آخر مستوى موجود في المسار، ويمكن تعديل التصنيف مباشرة من بطاقة المنتج.</p>
-            <p class="category-help">حذف تصنيف لا يحذف المنتجات: انقل المنتجات أولًا، واحذف الفروع من المستوى الثالث للأعلى.</p>
+            <p>رتّب الكتالوج من التصنيف الرئيسي إلى الفرعي ثم الفرعي الثالث. يمكنك إسناد المنتج لأي مستوى، والتصنيف الرئيسي وحده يكفي لظهوره ضمن مجموعته؛ ويمكن تعديل المسار مباشرة من بطاقة المنتج.</p>
+            <p class="category-help">إذا شغّلت ملف التعيينات المبدئية، فالتصنيف مبني على الوصف أو عائلة الكود عند غيابه؛ راجعه وعدّله من البطاقة عند الحاجة. حذف تصنيف لا يحذف المنتجات؛ انقلها أولًا واحذف الفروع من المستوى الثالث للأعلى.</p>
         </section>
         <section class="category-add-panel">
             <h2>إضافة تصنيف أو مستوى فرعي</h2>
@@ -2012,13 +2121,14 @@ function showCategory(int $categoryId, int $page): void
     $path = categoryPathFromId($categoryId, $byId);
     $pathLabel = implode(' / ', array_column($path, 'name'));
     $children = $childrenByParent[$categoryId] ?? [];
+    $childLevel = min(count($path) + 1, 3);
     $perPage = 12;
     $total = count($products);
     $totalPages = max(1, (int)ceil($total / $perPage));
     $page = max(1, min($page, $totalPages));
     ob_start();
     ?>
-    <div class="category-browser-panel">
+    <div class="category-browser-panel" data-category-level="<?= count($path) ?>">
         <div class="toolbar" style="padding:0;box-shadow:none;margin:0 0 10px">
             <div class="toolbar-title"><?= h($pathLabel) ?></div>
             <div class="toolbar-count"><?= $total ?> منتج</div>
@@ -2027,11 +2137,11 @@ function showCategory(int $categoryId, int $page): void
         <?php if ($children): ?>
             <div class="category-child-links">
                 <?php foreach ($children as $childId): ?>
-                    <a class="category-child-link" href="?action=category&amp;category_id=<?= $childId ?>"><?= h((string)$byId[$childId]['name']) ?></a>
+                    <a class="category-child-link level-<?= $childLevel ?>" href="?action=category&amp;category_id=<?= $childId ?>"><?= h((string)$byId[$childId]['name']) ?></a>
                 <?php endforeach; ?>
             </div>
         <?php endif; ?>
-        <p class="category-help">تظهر هنا المنتجات المسندة لهذا التصنيف أو لأي مستوى تابع له. اختر منتجًا لتغيير تصنيفه من البطاقة.</p>
+        <p class="category-help">تظهر المنتجات المسندة لهذا التصنيف أو لأي فرع تابع له. إذا شغّلت ملف التعيينات المبدئية، فهي مبنية على الوصف أو عائلة الكود عند غيابه؛ راجع بطاقة كل منتج وعدّل التصنيف عند الحاجة.</p>
     </div>
     <?php renderProducts(array_slice($products, ($page - 1) * $perPage, $perPage), $page, $totalPages, '?action=category&category_id='.$categoryId); ?>
     <?php
