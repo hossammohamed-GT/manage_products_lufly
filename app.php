@@ -18,13 +18,18 @@ $config = require __DIR__ . '/config.php';
 if (is_file(__DIR__ . '/config.local.php'))
     $config = array_replace($config, require __DIR__ . '/config.local.php');
 
-require_once __DIR__ . '/includes/catalog_storage.php';
-// Resolve storage explicitly from APP_STORAGE (auto/files/database in .env or
-// config.local.php). There is deliberately no silent MySQL→SQLite/JSON
-// fallback when a database is unreachable.
-$config['driver'] = catalogDriver($config, $_SERVER, PHP_SAPI);
-
-
+// Auto-detect: if driver is mysql but MySQL is unreachable, silently fall back to SQLite
+if (($config['driver'] ?? 'mysql') === 'mysql') {
+    try {
+        $testPdo = @new PDO('mysql:host=' . $config['host'] . ';port=' . (int)$config['port'], $config['username'] ?? 'root', $config['password'] ?? '', [PDO::ATTR_TIMEOUT => 2]);
+        $testPdo = null; // MySQL is reachable, keep mysql driver
+    } catch (Throwable $e) {
+        // MySQL not reachable, fall back to SQLite automatically
+        $config['driver'] = 'sqlite';
+        if (empty($config['sqlite_path']))
+            $config['sqlite_path'] = __DIR__ . '/data/lufly.sqlite';
+    }
+}
 const STATUSES = ['Running', 'New Model', 'Slow Moving', 'Aging'];
 function h($s): string
 {
@@ -61,23 +66,9 @@ function groupCode(string $code): string
     $pos = strpos($code, '-');
     return $pos !== false && $pos > 0 ? strtoupper(trim(substr($code, 0, $pos))) : 'غير مصنف';
 }
-function isFilesMode(): bool
+function db(bool $serverOnly = false): PDO
 {
     global $config;
-    return ($config['driver'] ?? '') === 'json';
-}
-function db(bool $serverOnly = false): PDO|JsonCatalogStore
-{
-    global $config;
-    static $instance = null;
-    if (!$serverOnly && $instance !== null)
-        return $instance;
-    if (($config['driver'] ?? 'mysql') === 'json') {
-        $store = new JsonCatalogStore($config['json_path'] ?? __DIR__ . '/data/local/catalog.json.php', __DIR__ . '/data/catalog.json');
-        if (!$serverOnly)
-            $instance = $store;
-        return $store;
-    }
     if ($config['driver'] === 'sqlite') {
         $pdo = new PDO('sqlite:' . $config['sqlite_path']);
         $pdo->exec('PRAGMA foreign_keys=ON');
@@ -94,41 +85,33 @@ function db(bool $serverOnly = false): PDO|JsonCatalogStore
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
     $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
-    if (!$serverOnly)
-        $instance = $pdo;
     return $pdo;
 }
-
 function run(PDO $db, string $sql, array $params = []): PDOStatement
 {
     $s = $db->prepare($sql);
     $s->execute($params);
     return $s;
 }
-function setting(PDO|JsonCatalogStore $db, string $key, string $default = ''): string
+function setting(PDO $db, string $key, string $default = ''): string
 {
     try {
-        $row = catalogRow($db, 'settings', ['name' => $key]);
-        return $row === false ? $default : (string) $row['value'];
+        $v = run($db, 'SELECT value FROM settings WHERE name=?', [$key])->fetchColumn();
+        return $v === false ? $default : (string) $v;
     } catch (Throwable $e) {
         return $default;
     }
 }
-function setSetting(PDO|JsonCatalogStore $db, string $key, string $value): void
+function setSetting(PDO $db, string $key, string $value): void
 {
-    if (catalogRow($db, 'settings', ['name' => $key]) === false)
-        catalogInsert($db, 'settings', ['name' => $key, 'value' => $value]);
+    if (run($db, 'SELECT name FROM settings WHERE name=?', [$key])->fetchColumn() === false)
+        run($db, 'INSERT INTO settings (name,value) VALUES (?,?)', [$key, $value]);
     else
-        catalogUpdate($db, 'settings', ['value' => $value], ['name' => $key]);
+        run($db, 'UPDATE settings SET value=? WHERE name=?', [$value, $key]);
 }
-
 function install(): void
 {
     global $config;
-    if (($config['driver'] ?? 'mysql') === 'json') {
-        db(); // JsonCatalogStore seeds itself from data/catalog.json on first use.
-        return;
-    }
     $db = db(true);
     if ($config['driver'] === 'mysql') {
         $db->exec('CREATE DATABASE IF NOT EXISTS `' . $config['database'] . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
@@ -161,42 +144,22 @@ function install(): void
             throw new RuntimeException('تم التثبيت بالفعل. لن تتم إعادة استيراد أو استبدال بياناتك.');
         $seed = json_decode(file_get_contents(__DIR__ . '/data/catalog.json'), true, 512, JSON_THROW_ON_ERROR);
         $now = date('c');
-        // Preserve hosting edits carried by the seed (archived/verified/version/timestamps);
-        // fall back to fresh-install defaults for older seed files that lack them.
         foreach ($seed['products'] as $p)
-            run($db, 'INSERT INTO products (id,code,brand,status,description,notes,source_file,source_row,source_extra,archived,verified,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [$p['id'], $p['code'], $p['brand'], $p['status'], $p['description'], $p['notes'], $p['source_file'], $p['source_row'], $p['source_extra'], (int) ($p['archived'] ?? 0), (int) ($p['verified'] ?? 0), max(1, (int) ($p['version'] ?? 1)), $p['created_at'] ?? $now, $p['updated_at'] ?? $now]);
+            run($db, 'INSERT INTO products (id,code,brand,status,description,notes,source_file,source_row,source_extra,verified,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [$p['id'], $p['code'], $p['brand'], $p['status'], $p['description'], $p['notes'], $p['source_file'], $p['source_row'], $p['source_extra'], 0, $now, $now]);
         foreach ($seed['media'] as $m)
             run($db, 'INSERT INTO media (id,product_id,path,original_name,kind,caption,sort_order,previewable,source_column,source_row,sha256) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [$m['id'], $m['product_id'], $m['path'], $m['original_name'], $m['kind'], $m['caption'], $m['sort_order'], (int) $m['previewable'], $m['source_column'], $m['source_row'], $m['sha256']]);
         setSetting($db, 'installed', '1');
         $db->commit();
-        // Align id counters with the hosting dump so the next local id matches hosting.
-        try {
-            $syncReportPath = __DIR__ . '/data/sync-report.json';
-            if (is_file($syncReportPath)) {
-                $nextIds = json_decode((string) file_get_contents($syncReportPath), true)['next_ids'] ?? [];
-                foreach (['products', 'media'] as $table) {
-                    $next = (int) ($nextIds[$table] ?? 0);
-                    if ($next <= 0)
-                        continue;
-                    if (($config['driver'] ?? '') === 'mysql')
-                        $db->exec("ALTER TABLE {$table} AUTO_INCREMENT = {$next}");
-                    elseif (($config['driver'] ?? '') === 'sqlite')
-                        $db->exec("UPDATE sqlite_sequence SET seq = " . ($next - 1) . " WHERE name = '{$table}'");
-                }
-            }
-        } catch (Throwable $e) {
-        }
     } catch (Throwable $e) {
         if ($db->inTransaction())
             $db->rollBack();
         throw $e;
     }
 }
-function mediaFor(PDO|JsonCatalogStore $db, int $id): array
+function mediaFor(PDO $db, int $id): array
 {
-    return catalogRows($db, 'media', ['product_id' => $id], ['sort_order' => 'ASC', 'id' => 'ASC']);
+    return run($db, 'SELECT * FROM media WHERE product_id=? ORDER BY sort_order,id', [$id])->fetchAll();
 }
-
 function uploadFiles(string $field = 'files'): array
 {
     if (empty($_FILES[$field]))
@@ -221,10 +184,9 @@ function uploadFiles(string $field = 'files'): array
             $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif'];
             if (!isset($allowed[$mime]) || @getimagesize($tmp) === false)
                 throw new RuntimeException('مسموح فقط بصور JPG وPNG وWebP وGIF صحيحة.');
-            $uploadDir = isFilesMode() ? 'uploads/local' : 'uploads';
-            if (!is_dir(__DIR__ . '/' . $uploadDir))
-                mkdir(__DIR__ . '/' . $uploadDir, 0755, true);
-            $path = $uploadDir . '/' . bin2hex(random_bytes(18)) . '.' . $allowed[$mime];
+            if (!is_dir(__DIR__ . '/uploads'))
+                mkdir(__DIR__ . '/uploads', 0755, true);
+            $path = 'uploads/' . bin2hex(random_bytes(18)) . '.' . $allowed[$mime];
             if (!move_uploaded_file($tmp, __DIR__ . '/' . $path))
                 throw new RuntimeException('تعذر حفظ الصورة. تأكد من صلاحيات مجلد uploads.');
             $result[] = ['path' => $path, 'original_name' => substr(basename(str_replace('\\', '/', (string) $name)), 0, 240), 'sha256' => hash_file('sha256', __DIR__ . '/' . $path)];
@@ -236,7 +198,7 @@ function uploadFiles(string $field = 'files'): array
     }
     return $result;
 }
-function saveProduct(PDO|JsonCatalogStore $db): int
+function saveProduct(PDO $db): int
 {
     $id = max(0, (int) ($_POST['id'] ?? 0));
     $code = trim((string) ($_POST['code'] ?? ''));
@@ -259,16 +221,17 @@ function saveProduct(PDO|JsonCatalogStore $db): int
         $db->beginTransaction();
         $now = date('c');
         if ($id) {
-            $count = catalogUpdate($db, 'products', ['code' => $code, 'brand' => $brand, 'status' => $status, 'description' => $description, 'notes' => $notes, 'updated_at' => $now], ['id' => $id, 'version' => (int) ($_POST['version'] ?? 0), 'archived' => 0], true);
-            if ($count !== 1)
+            $s = run($db, 'UPDATE products SET code=?,brand=?,status=?,description=?,notes=?,version=version+1,updated_at=? WHERE id=? AND version=? AND archived=0', [$code, $brand, $status, $description, $notes, $now, $id, (int) ($_POST['version'] ?? 0)]);
+            if ($s->rowCount() !== 1)
                 throw new RuntimeException('تم تعديل المنتج في نافذة أخرى أو نقله للأرشيف. حدّث الصفحة قبل الحفظ حتى لا تفقد تعديلات أخرى.');
         } else {
-            $id = catalogInsert($db, 'products', ['code' => $code, 'brand' => $brand, 'status' => $status, 'description' => $description, 'notes' => $notes, 'source_extra' => '{}', 'created_at' => $now, 'updated_at' => $now]);
+            run($db, 'INSERT INTO products (code,brand,status,description,notes,source_extra,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', [$code, $brand, $status, $description, $notes, '{}', $now, $now]);
+            $id = (int) $db->lastInsertId();
         }
         foreach (mediaFor($db, $id) as $m) {
-            $mid = (int) $m['id'];
+            $mid = $m['id'];
             if (isset($_POST['remove_media'][$mid])) {
-                catalogDelete($db, 'media', ['id' => $mid, 'product_id' => $id]);
+                run($db, 'DELETE FROM media WHERE id=? AND product_id=?', [$mid, $id]);
                 $removedPaths[] = $m['path'];
                 continue;
             }
@@ -276,10 +239,10 @@ function saveProduct(PDO|JsonCatalogStore $db): int
             $type = (string) ($_POST['kind'][$mid] ?? $m['kind']);
             if (strlen($caption) > 255 || !in_array($type, ['photo', 'drawing', 'extra'], true))
                 throw new RuntimeException('بيانات المرفق غير صالحة.');
-            catalogUpdate($db, 'media', ['caption' => $caption, 'kind' => $type, 'sort_order' => (int) ($_POST['sort'][$mid] ?? $m['sort_order'])], ['id' => $mid, 'product_id' => $id]);
+            run($db, 'UPDATE media SET caption=?,kind=?,sort_order=? WHERE id=? AND product_id=?', [$caption, $type, (int) ($_POST['sort'][$mid] ?? $m['sort_order']), $mid, $id]);
         }
         foreach ($files as $i => $m)
-            catalogInsert($db, 'media', ['product_id' => $id, 'path' => $m['path'], 'original_name' => $m['original_name'], 'kind' => $kind, 'caption' => '', 'sort_order' => 10000 + $i, 'previewable' => 1, 'source_column' => '', 'source_row' => 0, 'sha256' => $m['sha256']]);
+            run($db, 'INSERT INTO media (product_id,path,original_name,kind,caption,sort_order,previewable,source_column,source_row,sha256) VALUES (?,?,?,?,?,?,?,?,?,?)', [$id, $m['path'], $m['original_name'], $kind, '', 10000 + $i, 1, '', 0, $m['sha256']]);
         $db->commit();
     } catch (Throwable $e) {
         if ($db->inTransaction())
@@ -291,25 +254,9 @@ function saveProduct(PDO|JsonCatalogStore $db): int
     foreach (array_unique($removedPaths) as $path) deleteMediaFile($db, $path);
     return $id;
 }
-
-function allProducts(PDO|JsonCatalogStore $db, bool $archived = false): array
+function allProducts(PDO $db, bool $archived = false): array
 {
-    if ($db instanceof JsonCatalogStore) {
-        $rows = catalogRows($db, 'products', ['archived' => (int) $archived], ['id' => 'ASC']);
-        $byProduct = [];
-        foreach (catalogRows($db, 'media') as $m)
-            $byProduct[(int) $m['product_id']][] = $m;
-        foreach ($rows as &$p) {
-            $list = $byProduct[(int) $p['id']] ?? [];
-            $p['media_count'] = count($list);
-            $candidates = array_values(array_filter($list, fn($m) => (int) $m['previewable'] === 1));
-            usort($candidates, fn($a, $b) => [($a['kind'] === 'photo' ? 0 : 1), $a['sort_order'], $a['id']] <=> [($b['kind'] === 'photo' ? 0 : 1), $b['sort_order'], $b['id']]);
-            $p['cover'] = $candidates[0]['path'] ?? null;
-        }
-        unset($p);
-    } else {
-        $rows = run($db, 'SELECT p.*, (SELECT COUNT(*) FROM media m WHERE m.product_id=p.id) AS media_count, (SELECT path FROM media m WHERE m.product_id=p.id AND m.previewable=1 ORDER BY CASE WHEN kind=\'photo\' THEN 0 ELSE 1 END,sort_order,id LIMIT 1) AS cover FROM products p WHERE archived=? ORDER BY id', [(int) $archived])->fetchAll();
-    }
+    $rows = run($db, 'SELECT p.*, (SELECT COUNT(*) FROM media m WHERE m.product_id=p.id) AS media_count, (SELECT path FROM media m WHERE m.product_id=p.id AND m.previewable=1 ORDER BY CASE WHEN kind=\'photo\' THEN 0 ELSE 1 END,sort_order,id LIMIT 1) AS cover FROM products p WHERE archived=? ORDER BY id', [(int) $archived])->fetchAll();
     $counts = [];
     foreach ($rows as $p) {
         $key = strtoupper(trim($p['code']));
@@ -324,23 +271,20 @@ function allProducts(PDO|JsonCatalogStore $db, bool $archived = false): array
     unset($p);
     return $rows;
 }
-
 function mediaLabel(string $kind): string
 {
     return ['photo' => 'صورة المنتج', 'drawing' => 'رسم فني', 'extra' => 'صورة إضافية'][$kind] ?? 'مرفق';
 }
 
 // Safely delete catalog/upload files only after their last database reference is gone.
-function deleteMediaFile(PDO|JsonCatalogStore $db, string $path): void
+function deleteMediaFile(PDO $db, string $path): void
 {
     $normalizedPath = ltrim(str_replace('\\', '/', $path), '/');
-    if (catalogRows($db, 'media', ['path' => $path]) !== [])
+    if ((int)run($db, 'SELECT COUNT(*) FROM media WHERE path=?', [$path])->fetchColumn() > 0)
         return;
     $fullPath = realpath(__DIR__ . '/' . $normalizedPath);
     if ($fullPath === false) return;
-    // Files mode must never delete bundled catalog assets or hosting uploads.
-    $directories = $db instanceof JsonCatalogStore ? ['uploads/local'] : ['uploads', 'assets/catalog'];
-    foreach ($directories as $directory) {
+    foreach (['uploads', 'assets/catalog'] as $directory) {
         $root = realpath(__DIR__ . '/' . $directory);
         if ($root !== false && str_starts_with($fullPath, $root . DIRECTORY_SEPARATOR) && is_file($fullPath)) {
             @unlink($fullPath);
@@ -349,23 +293,21 @@ function deleteMediaFile(PDO|JsonCatalogStore $db, string $path): void
     }
 }
 
-
-function requireProduct(PDO|JsonCatalogStore $db, int $id, bool $activeOnly = true): array
+function requireProduct(PDO $db, int $id, bool $activeOnly = true): array
 {
-    $product = catalogRow($db, 'products', $activeOnly ? ['id' => $id, 'archived' => 0] : ['id' => $id]);
+    $product = run($db, 'SELECT * FROM products WHERE id=?' . ($activeOnly ? ' AND archived=0' : ''), [$id])->fetch();
     if (!$product) throw new RuntimeException('المنتج غير موجود أو تم نقله للأرشيف');
     return $product;
 }
 
-
-function deleteProductRecord(PDO|JsonCatalogStore $db, int $id): void
+function deleteProductRecord(PDO $db, int $id): void
 {
     $db->beginTransaction();
     try {
         requireProduct($db, $id, false);
         $media = mediaFor($db, $id);
-        catalogDelete($db, 'media', ['product_id' => $id]);
-        catalogDelete($db, 'products', ['id' => $id]);
+        run($db, 'DELETE FROM media WHERE product_id=?', [$id]);
+        run($db, 'DELETE FROM products WHERE id=?', [$id]);
         $db->commit();
     } catch (Throwable $e) {
         if ($db->inTransaction()) $db->rollBack();
@@ -374,8 +316,7 @@ function deleteProductRecord(PDO|JsonCatalogStore $db, int $id): void
     foreach (array_unique(array_column($media, 'path')) as $path) deleteMediaFile($db, $path);
 }
 
-
-function changeMedia(PDO|JsonCatalogStore $db, string $op, int $productId, int $mediaId, string $kind = 'photo'): array
+function changeMedia(PDO $db, string $op, int $productId, int $mediaId, string $kind = 'photo'): array
 {
     if (!in_array($op, ['add', 'replace', 'delete'], true)) throw new RuntimeException('عملية غير صالحة');
     if ($op !== 'add' && $mediaId <= 0) throw new RuntimeException('معرف الصورة مطلوب');
@@ -383,7 +324,7 @@ function changeMedia(PDO|JsonCatalogStore $db, string $op, int $productId, int $
     requireProduct($db, $productId);
     $old = null;
     if ($op !== 'add') {
-        $old = catalogRow($db, 'media', ['id' => $mediaId, 'product_id' => $productId]);
+        $old = run($db, 'SELECT * FROM media WHERE id=? AND product_id=?', [$mediaId, $productId])->fetch();
         if (!$old) throw new RuntimeException('الصورة غير موجودة');
     }
     $files = $op === 'delete' ? [] : uploadFiles('file');
@@ -394,16 +335,17 @@ function changeMedia(PDO|JsonCatalogStore $db, string $op, int $productId, int $
     try {
         $db->beginTransaction();
         if ($op === 'delete') {
-            catalogDelete($db, 'media', ['id' => $mediaId, 'product_id' => $productId]);
+            run($db, 'DELETE FROM media WHERE id=? AND product_id=?', [$mediaId, $productId]);
         } elseif ($op === 'replace') {
             $file = $files[0];
-            catalogUpdate($db, 'media', ['path' => $file['path'], 'sha256' => $file['sha256'], 'kind' => $kind, 'original_name' => $file['original_name']], ['id' => $mediaId, 'product_id' => $productId]);
+            run($db, 'UPDATE media SET path=?,sha256=?,kind=?,original_name=? WHERE id=? AND product_id=?',
+                [$file['path'], $file['sha256'], $kind, $file['original_name'], $mediaId, $productId]);
         } else {
             $file = $files[0];
-            $sort = 0;
-            foreach (mediaFor($db, $productId) as $m)
-                $sort = max($sort, (int) $m['sort_order']);
-            $mediaId = catalogInsert($db, 'media', ['product_id' => $productId, 'path' => $file['path'], 'original_name' => $file['original_name'], 'kind' => $kind, 'caption' => '', 'sort_order' => $sort + 1, 'previewable' => 1, 'source_column' => '', 'source_row' => 0, 'sha256' => $file['sha256']]);
+            $sort = (int)run($db, 'SELECT MAX(sort_order) FROM media WHERE product_id=?', [$productId])->fetchColumn();
+            run($db, 'INSERT INTO media (product_id,path,original_name,kind,caption,sort_order,previewable,sha256) VALUES (?,?,?,?,?,?,1,?)',
+                [$productId, $file['path'], $file['original_name'], $kind, '', $sort + 1, $file['sha256']]);
+            $mediaId = (int)$db->lastInsertId();
         }
         $db->commit();
     } catch (Throwable $e) {

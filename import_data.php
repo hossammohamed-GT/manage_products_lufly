@@ -28,11 +28,6 @@ try {
   // الاتصال بالـ database
   echo "🔌 جاري الاتصال بـ MySQL...\n";
   $db = db(); // Normal connection with database selected
-  if (!$db instanceof PDO) {
-    echo "⚠️ وضع الملفات المحلي نشط — هذه الأداة لقواعد البيانات (MySQL/SQLite) فقط.\n";
-    echo "في وضع الملفات، البيانات الحالية هي data/local/catalog.json.php وتُزامَن من lufly_catalog.sql بأداة tools/sync_local_from_sql.py.\n";
-    exit(0);
-  }
 
   // التحقق من وجود المنتجات مسبقاً
   $existingCount = (int) $db->query('SELECT COUNT(*) FROM products')->fetchColumn();
@@ -45,52 +40,50 @@ try {
     echo "2. إلغاء العملية؟\n";
     echo "\n";
 
-    // لو script من المتصفح: نفذ اختيار المستخدم أو اعرض الأزرار
+    // لو script من المتصفح، نعرض أزرار
     if (php_sapi_name() !== 'cli') {
-      if (isset($_POST['action'])) {
-        checkCsrf();
-        if ($_POST['action'] !== 'delete') {
-          echo '<p>❌ تم إلغاء العملية.</p>';
-          exit;
-        }
-        echo "\n🗑️  جاري حذف البيانات القديمة...\n";
-        $db->exec('DELETE FROM media');
-        $db->exec('DELETE FROM products');
-        $db->exec('DELETE FROM settings WHERE name = "installed"');
-        echo "✅ تم حذف البيانات القديمة.\n\n";
-      } else {
-        echo '<form method="POST">';
-        echo token();
-        echo '<button type="submit" name="action" value="delete" class="btn btn-danger">حذف واستيراد</button>';
-        echo '<button type="submit" name="action" value="cancel" class="btn btn-secondary">إلغاء</button>';
-        echo '</form>';
-        echo '<style>
-                      body { font-family: Arial, sans-serif; direction: rtl; padding: 20px; background: #f5f5f5; }
-                      .btn { padding: 10px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
-                      .btn-danger { background: #e74c3c; color: white; }
-                      .btn-danger:hover { background: #c0392b; }
-                      .btn-secondary { background: #95a5a6; color: white; }
-                      .btn-secondary:hover { background: #7f8c8d; }
-                    </style>';
-        exit;
-      }
-    } else {
-      // لو من command line، نسأل
-      $handle = fopen("php://stdin", "r");
-      $line = fgets($handle);
-      fclose($handle);
+      echo '<form method="POST">';
+      echo '<button type="submit" name="action" value="delete" class="btn btn-danger">حذف واستيراد</button>';
+      echo '<button type="submit" name="action" value="cancel" class="btn btn-secondary">إلغاء</button>';
+      echo '</form>';
+      echo '<style>
+                    body { font-family: Arial, sans-serif; direction: rtl; padding: 20px; background: #f5f5f5; }
+                    .btn { padding: 10px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+                    .btn-danger { background: #e74c3c; color: white; }
+                    .btn-danger:hover { background: #c0392b; }
+                    .btn-secondary { background: #95a5a6; color: white; }
+                    .btn-secondary:hover { background: #7f8c8d; }
+                  </style>';
+      exit;
+    }
 
-      if (trim((string) $line) !== '1') {
-        echo "❌ تم إلغاء العملية.\n";
-        exit(0);
-      }
+    // لو من command line، نسأل
+    $handle = fopen("php://stdin", "r");
+    $line = fgets($handle);
+    fclose($handle);
 
-      // حذف البيانات القديمة
-      echo "\n🗑️  جاري حذف البيانات القديمة...\n";
+    if (trim($line) !== '1') {
+      echo "❌ تم إلغاء العملية.\n";
+      exit(0);
+    }
+
+    // حذف البيانات القديمة
+    echo "\n🗑️  جاري حذف البيانات القديمة...\n";
+    $db->exec('DELETE FROM media');
+    $db->exec('DELETE FROM products');
+    $db->exec('DELETE FROM settings WHERE name = "installed"');
+    echo "✅ تم حذف البيانات القديمة.\n\n";
+  }
+
+  // التحقق من action من المتصفح
+  if (php_sapi_name() !== 'cli' && isset($_POST['action'])) {
+    if ($_POST['action'] === 'delete') {
       $db->exec('DELETE FROM media');
       $db->exec('DELETE FROM products');
       $db->exec('DELETE FROM settings WHERE name = "installed"');
-      echo "✅ تم حذف البيانات القديمة.\n\n";
+    } else {
+      echo '<p>❌ تم إلغاء العملية.</p>';
+      exit;
     }
   }
 
@@ -103,11 +96,9 @@ try {
   // استيراد المنتجات
   echo "   📦 استيراد {$productCount} منتج...\n";
   $insertProduct = $db->prepare('
-        INSERT INTO products (id, code, brand, status, description, notes, source_file, source_row, source_extra, archived, verified, version, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO products (id, code, brand, status, description, notes, source_file, source_row, source_extra, verified, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NOW(), NOW())
     ');
-  // نحافظ على تعديلات الاستضافة الموجودة في catalog.json (archived/verified/version/التواريخ)
-  $now = date('c');
 
   foreach ($data['products'] as $index => $product) {
     $insertProduct->execute([
@@ -119,12 +110,7 @@ try {
       $product['notes'],
       $product['source_file'],
       $product['source_row'],
-      $product['source_extra'],
-      (int) ($product['archived'] ?? 0),
-      (int) ($product['verified'] ?? 0),
-      max(1, (int) ($product['version'] ?? 1)),
-      $product['created_at'] ?? $now,
-      $product['updated_at'] ?? $now
+      $product['source_extra']
     ]);
 
     if (($index + 1) % 100 === 0) {
@@ -163,22 +149,6 @@ try {
   $db->prepare('INSERT INTO settings (name, value) VALUES ("installed", "1")')->execute();
 
   $db->commit();
-
-  // محاذاة عدادات الـ id مع قاعدة الاستضافة لو تقرير المزامنة موجود
-  try {
-    $syncReportPath = __DIR__ . '/data/sync-report.json';
-    if (is_file($syncReportPath)) {
-      $nextIds = json_decode(file_get_contents($syncReportPath), true)['next_ids'] ?? [];
-      foreach (['products', 'media'] as $table) {
-        $next = (int) ($nextIds[$table] ?? 0);
-        if ($next <= 0) continue;
-        if (($config['driver'] ?? '') === 'mysql') $db->exec("ALTER TABLE {$table} AUTO_INCREMENT = {$next}");
-        elseif (($config['driver'] ?? '') === 'sqlite') $db->exec("UPDATE sqlite_sequence SET seq = " . ($next - 1) . " WHERE name = '{$table}'");
-      }
-    }
-  } catch (Throwable $e) {
-    // المحاذاة اختيارية — الاستيراد نفسه اكتمل
-  }
 
   $duration = round(microtime(true) - $startTime, 2);
 

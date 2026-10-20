@@ -2,7 +2,7 @@
 declare(strict_types=1);
 require __DIR__.'/app.php';
 require_once __DIR__.'/includes/sidebar.php';
-if (!isFilesMode()) require_once __DIR__.'/includes/image_enhancement.php';
+require_once __DIR__.'/includes/image_enhancement.php';
 
 // Authentication check
 $appPassword = $config['app_password'] ?? '';
@@ -15,7 +15,7 @@ if ($appPassword !== '') {
     
     // Session timeout after 8 hours
     if (isset($_SESSION['lufly_login_time']) && (time() - $_SESSION['lufly_login_time'] > 28800)) {
-        foreach (array_keys($_SESSION['enhancements'] ?? []) as $token) if (function_exists('discardEnhancement')) discardEnhancement($token);
+        foreach (array_keys($_SESSION['enhancements'] ?? []) as $token) discardEnhancement($token);
         session_destroy();
         header('Location: login.php');
         exit;
@@ -29,7 +29,7 @@ try {
     $needsInstall = false;
     try {
         $testDb = db();
-        if ($testDb instanceof PDO) $testDb->query('SELECT COUNT(*) FROM products');
+        $testDb->query('SELECT COUNT(*) FROM products');
     } catch (Throwable $e) { $needsInstall = true; }
     if ($needsInstall) {
         try { install(); } catch (Throwable $e) {
@@ -38,10 +38,6 @@ try {
         }
     }
 
-    if (isFilesMode() && in_array($action, ['enhancement_preview', 'enhancement_create', 'enhancement_approve', 'enhancement_cancel'], true)) {
-        http_response_code(404);
-        exit;
-    }
     if ($action === 'enhancement_preview') {
         try {
             $preview = enhancementPreview(is_string($_GET['token'] ?? null) ? $_GET['token'] : '');
@@ -90,7 +86,7 @@ try {
             $product = requireProduct($d, $id);
             $current = (int)$product['verified'];
             $newVal = $current ? 0 : 1;
-            catalogUpdate($d, 'products', ['verified' => $newVal, 'updated_at' => date('c')], ['id' => $id], true);
+            run($d, 'UPDATE products SET verified=?, version=version+1, updated_at=? WHERE id=?', [$newVal, date('c'), $id]);
             echo json_encode(['ok'=>true, 'verified'=>$newVal]);
         } catch (Throwable $e) {
             http_response_code(400);
@@ -110,8 +106,9 @@ try {
             }
             $ids = array_values(array_unique($ids));
             foreach ($ids as $id) requireProduct($d, $id);
-            $updated = catalogUpdate($d, 'products', ['verified' => 1, 'updated_at' => date('c')], ['archived' => 0, 'id' => $ids], true);
-            echo json_encode(['ok'=>true, 'count'=>$updated]);
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $updated = run($d, "UPDATE products SET verified=1, version=version+1, updated_at=? WHERE archived=0 AND id IN ($placeholders)", array_merge([date('c')], $ids));
+            echo json_encode(['ok'=>true, 'count'=>$updated->rowCount()]);
         } catch (Throwable $e) {
             http_response_code(400);
             echo json_encode(['ok'=>false, 'error'=>$e->getMessage()]);
@@ -121,7 +118,7 @@ try {
 
     // Logout
     if ($action === 'logout') {
-        foreach (array_keys($_SESSION['enhancements'] ?? []) as $token) if (function_exists('discardEnhancement')) discardEnhancement($token);
+        foreach (array_keys($_SESSION['enhancements'] ?? []) as $token) discardEnhancement($token);
         session_destroy();
         header('Location: login.php');
         exit;
@@ -168,8 +165,8 @@ try {
                 if ($field === 'status' && !in_array($value, STATUSES, true)) throw new RuntimeException('حالة غير صالحة');
                 if (strlen($value) > (in_array($field, ['code', 'brand'], true) ? 190 : 60000)) throw new RuntimeException('النص طويل جداً');
                 $now = date('c');
-                $count = catalogUpdate($d, 'products', [$field => $value, 'updated_at' => $now], ['id' => $id, 'archived' => 0], true);
-                if ($count !== 1) throw new RuntimeException('المنتج غير موجود');
+                $s = run($d, "UPDATE products SET $field=?, version=version+1, updated_at=? WHERE id=? AND archived=0", [$value, $now, $id]);
+                if ($s->rowCount() !== 1) throw new RuntimeException('المنتج غير موجود');
                 echo json_encode(['ok'=>true, 'field'=>$field, 'value'=>$value]);
             }
             else if ($action === 'media_action') {
@@ -194,7 +191,8 @@ try {
             if ($action === 'delete') {
                 deleteProductRecord($d, $id);
             } else {
-                catalogUpdate($d, 'products', ['archived' => ($action === 'archive' ? 1 : 0), 'updated_at' => date('c')], ['id' => $id], true);
+                run($d, 'UPDATE products SET archived=?,version=version+1,updated_at=? WHERE id=?',
+                    [$action === 'archive' ? 1 : 0, date('c'), $id]);
             }
             echo json_encode(['ok'=>true]);
         } catch (Throwable $e) {
@@ -765,7 +763,6 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .lb-enhance { background: #e2f7ef; color: #116348; }
 .lightbox-action-btn:disabled { opacity: .55; cursor: wait; }
 .lightbox-actions { max-width: 95vw; flex-wrap: wrap; justify-content: center; }
-<?php if (!isFilesMode()): ?>
 .enhancement-panel { width: min(1080px, 90vw); max-height: calc(100dvh - 110px); overflow-y: auto; color: white; padding: 24px; background: #18212b; border: 1px solid #43505e; border-radius: 16px; }
 .enhancement-panel[hidden] { display: none; }
 .enhancement-panel h2 { margin-bottom: 8px; }
@@ -775,13 +772,10 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
 .enhancement-compare figcaption { padding: 8px; font-weight: bold; text-align: center; }
 .enhancement-compare img { width: 100%; height: min(48vh, 460px); object-fit: contain; background: #e6e9ec; border-radius: 10px; }
 .enhancement-decisions { display: flex; gap: 12px; flex-wrap: wrap; }
-<?php endif; ?>
 @media (max-width: 650px) {
-<?php if (!isFilesMode()): ?>
     .enhancement-compare { grid-template-columns: 1fr; }
     .enhancement-compare img { height: 28vh; }
     .enhancement-panel { padding: 14px; }
-<?php endif; ?>
     .lightbox-actions { bottom: 12px; gap: 6px; padding: 10px; width: 95vw; }
     .lightbox-action-btn { padding: 10px; }
 }
@@ -854,10 +848,6 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     <a href="?action=logout" class="logout-btn" title="تسجيل الخروج"><i class="fas fa-sign-out-alt"></i></a>
 </div>
 
-<?php if (isFilesMode()): ?>
-<div style="background:#fff7e6;border-bottom:1px solid #f5c66b;color:#7a4b00;padding:10px 24px;text-align:center;font-weight:700;">⚠️ وضع الملفات المحلي نشط — البيانات تُحفظ في ملفات JSON داخل <span dir="ltr">data/local</span> بدون قاعدة بيانات. انسخ هذا المجلد احتياطيًا مع <span dir="ltr">uploads/local</span>.</div>
-<?php endif; ?>
-
 <!-- ══ HERO BANNER ═══ -->
 <?php if ($d && in_array($action, ['home','group','search'])): ?>
 <div class="hero-banner">
@@ -880,7 +870,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
                     <div class="hero-stat-label">منتج</div>
                 </div>
                 <div class="hero-stat">
-                    <div class="hero-stat-num"><?= count(catalogRows($d, 'media')) ?></div>
+                    <div class="hero-stat-num"><?= (int)$d->query('SELECT COUNT(*) FROM media')->fetchColumn() ?></div>
                     <div class="hero-stat-label">مرفق</div>
                 </div>
             </div>
@@ -921,7 +911,7 @@ body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: var(--bg)
     <button class="lightbox-nav lightbox-prev" onclick="lbNav(-1)"><i class="fas fa-chevron-right"></i></button>
     <button class="lightbox-nav lightbox-next" onclick="lbNav(1)"><i class="fas fa-chevron-left"></i></button>
     <img class="lightbox-img" id="lbImg" src="" alt="">
-    <?php if (!isFilesMode()): ?><section id="lbEnhancement" class="enhancement-panel" hidden aria-label="مقارنة تحسين الصورة" aria-live="polite"></section><?php endif; ?>
+    <section id="lbEnhancement" class="enhancement-panel" hidden aria-label="مقارنة تحسين الصورة" aria-live="polite"></section>
     <div class="lightbox-actions" id="lbActions"></div>
 </div>
 
@@ -1018,7 +1008,7 @@ function updateLightbox() {
     document.getElementById('lbImg').src = lbState.images[lbState.idx];
     document.getElementById('lbCounter').textContent = (lbState.idx + 1) + ' / ' + lbState.total;
     document.getElementById('lbActions').innerHTML = `
-        <?php if (!isFilesMode()): ?><button class="lightbox-action-btn lb-enhance" onclick="enhanceImage()"><i class="fas fa-wand-magic-sparkles"></i> تحسين الصورة</button><?php endif; ?>
+        <button class="lightbox-action-btn lb-enhance" onclick="enhanceImage()"><i class="fas fa-wand-magic-sparkles"></i> تحسين الصورة</button>
         <button class="lightbox-action-btn lb-replace" onclick="triggerReplace()"><i class="fas fa-sync-alt"></i> استبدال</button>
         <button class="lightbox-action-btn lb-delete" onclick="deleteImage()"><i class="fas fa-trash"></i> حذف</button>
         <form class="lightbox-replace-form" id="lbReplaceForm" style="display:none;">
@@ -1148,7 +1138,6 @@ window.mediaAction = function(op, mediaId, productId, file) {
     .catch(() => showToast('خطأ في الاتصال', 'error'));
 };
 
-<?php if (!isFilesMode()): ?>
 function enhancementRequest(action, fields) {
     const body = new FormData();
     body.append('csrf', csrfToken);
@@ -1260,11 +1249,6 @@ window.approveImageEnhancement = function() {
     });
 };
 
-<?php else: ?>
-window.cancelEnhancement = function() {};
-window.enhanceImage = function() {};
-window.approveImageEnhancement = function() {};
-<?php endif; ?>
 function showToast(msg, type='success') {
     const t = document.getElementById('toast');
     t.textContent = msg;
@@ -1687,27 +1671,18 @@ function showError(string $message): void {
 }
 
 function showSetupError(string $message): void {
-    $files = isFilesMode();
     ob_start();
     ?>
     <div class="error-box">
-        <h3><i class="fas fa-exclamation-triangle"></i> <?= $files ? 'تعذر فتح البيانات المحلية' : 'تعذر الاتصال بقاعدة البيانات' ?></h3>
+        <h3><i class="fas fa-exclamation-triangle"></i> تعذر الاتصال بقاعدة البيانات</h3>
         <p style="margin:12px 0;"><?= h($message) ?></p>
         <div style="text-align:right;margin-top:20px;padding:16px;background:rgba(0,0,0,0.05);border-radius:8px;">
             <h4 style="margin-bottom:10px;">خطوات الحل:</h4>
-            <?php if ($files): ?>
-            <ol style="padding-right:20px;line-height:2;">
-                <li>احتفظ بنسخة من مجلد <strong dir="ltr">data/local</strong> كما هو ولا تحذف أي ملف منه</li>
-                <li>راجع النسخة الاحتياطية <strong dir="ltr">catalog.json.php.backup.php</strong> داخل نفس المجلد لاستعادة نسخة سليمة</li>
-                <li>بعد الاستعادة، حدّث الصفحة (F5)</li>
-            </ol>
-            <?php else: ?>
             <ol style="padding-right:20px;line-height:2;">
                 <li>افتح <strong>XAMPP Control Panel</strong></li>
                 <li>تأكد إن <strong>MySQL شغال</strong> (لو مش شغال اضغط Start)</li>
                 <li>بعد ما MySQL يشتغل، حدّث الصفحة (F5)</li>
             </ol>
-            <?php endif; ?>
         </div>
         <div style="margin-top:20px;">
             <a href="setup.php" class="btn btn-primary" style="margin:4px;"><i class="fas fa-stethoscope"></i> فحص النظام</a>

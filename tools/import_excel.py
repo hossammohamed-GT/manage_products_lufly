@@ -1,12 +1,6 @@
 """One-time build: python tools/import_excel.py google_drive (requires Pillow).
 Reads every drawing anchor, including unlabeled columns. Never deduplicates product rows.
 Browser assets use high-quality WebP; original non-raster files are preserved for download.
-
-WARNING (2026-10-20): data/catalog.json is no longer produced by this script.
-It is synced from the edited hosting database dump lufly_catalog.sql via
-tools/sync_local_from_sql.py. Re-running this Excel import would overwrite
-hosting edits (verification, code/description fixes, replaced and added
-images, two deleted products) with the original Excel snapshot.
 """
 import sys, json, zipfile, posixpath, hashlib, io, collections
 from pathlib import Path
