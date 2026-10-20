@@ -15,21 +15,6 @@ session_start();
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
 $config = require __DIR__ . '/config.php';
-if (is_file(__DIR__ . '/config.local.php'))
-    $config = array_replace($config, require __DIR__ . '/config.local.php');
-
-// Auto-detect: if driver is mysql but MySQL is unreachable, silently fall back to SQLite
-if (($config['driver'] ?? 'mysql') === 'mysql') {
-    try {
-        $testPdo = @new PDO('mysql:host=' . $config['host'] . ';port=' . (int)$config['port'], $config['username'] ?? 'root', $config['password'] ?? '', [PDO::ATTR_TIMEOUT => 2]);
-        $testPdo = null; // MySQL is reachable, keep mysql driver
-    } catch (Throwable $e) {
-        // MySQL not reachable, fall back to SQLite automatically
-        $config['driver'] = 'sqlite';
-        if (empty($config['sqlite_path']))
-            $config['sqlite_path'] = __DIR__ . '/data/lufly.sqlite';
-    }
-}
 const STATUSES = ['Running', 'New Model', 'Slow Moving', 'Aging'];
 function h($s): string
 {
@@ -56,9 +41,10 @@ function go(string $url): void
     header('Location: ' . $url);
     exit;
 }
-function flash(string $message): void
+function flash(string $message, string $type = 'success'): void
 {
     $_SESSION['flash'] = $message;
+    $_SESSION['flash_type'] = $type === 'error' ? 'error' : 'success';
 }
 function groupCode(string $code): string
 {
@@ -66,23 +52,174 @@ function groupCode(string $code): string
     $pos = strpos($code, '-');
     return $pos !== false && $pos > 0 ? strtoupper(trim(substr($code, 0, $pos))) : 'غير مصنف';
 }
+function categorySchemaReady(PDO $db): bool
+{
+    static $checked = false;
+    static $ready = false;
+    if ($checked)
+        return $ready;
+    $checked = true;
+    try {
+        $ready = (int)$db->query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('categories','product_categories')")->fetchColumn() === 2;
+    } catch (Throwable $e) {
+        $ready = false;
+    }
+    return $ready;
+}
+function categoryRows(PDO $db): array
+{
+    if (!categorySchemaReady($db))
+        return [];
+    return $db->query('SELECT id,category_key,parent_id,name,sort_order FROM categories ORDER BY COALESCE(parent_id,0),sort_order,id')->fetchAll();
+}
+function categoryTree(PDO $db): array
+{
+    $byParent = [];
+    foreach (categoryRows($db) as $row) {
+        $parentId = $row['parent_id'] === null ? 0 : (int)$row['parent_id'];
+        $byParent[$parentId][] = [
+            'id' => (int)$row['id'],
+            'parent_id' => $parentId ?: null,
+            'name' => (string)$row['name'],
+            'children' => [],
+        ];
+    }
+    $build = function (int $parentId) use (&$build, $byParent): array {
+        $nodes = $byParent[$parentId] ?? [];
+        foreach ($nodes as &$node)
+            $node['children'] = $build($node['id']);
+        unset($node);
+        return $nodes;
+    };
+    return $build(0);
+}
+function categoryDepth(PDO $db, int $categoryId): int
+{
+    $depth = 0;
+    $visited = [];
+    while ($categoryId > 0) {
+        if (isset($visited[$categoryId]))
+            throw new RuntimeException('يوجد تكرار غير صالح في مستويات التصنيفات.');
+        $visited[$categoryId] = true;
+        $row = run($db, 'SELECT parent_id FROM categories WHERE id=?', [$categoryId])->fetch();
+        if (!$row)
+            return 0;
+        $depth++;
+        $categoryId = $row['parent_id'] === null ? 0 : (int)$row['parent_id'];
+    }
+    return $depth;
+}
+function categoryPathFromId(int $categoryId, array $byId): array
+{
+    $path = [];
+    $visited = [];
+    while ($categoryId > 0 && isset($byId[$categoryId]) && !isset($visited[$categoryId]) && count($path) < 3) {
+        $visited[$categoryId] = true;
+        $row = $byId[$categoryId];
+        $path[] = ['id' => (int)$row['id'], 'name' => (string)$row['name']];
+        $categoryId = $row['parent_id'] === null ? 0 : (int)$row['parent_id'];
+    }
+    return array_reverse($path);
+}
+function cleanCategoryName(string $name): string
+{
+    $name = trim($name);
+    $length = preg_match_all('/./us', $name, $matches);
+    if ($name === '' || $length === false || $length > 190 || preg_match('/[\\x00-\\x1F\\x7F]/', $name))
+        throw new RuntimeException('اكتب اسمًا صالحًا للتصنيف (حتى 190 حرفًا).');
+    return $name;
+}
+function createCategoryNode(PDO $db, int $parentId, string $name): int
+{
+    if (!categorySchemaReady($db))
+        throw new RuntimeException('شغّل ملف database/migrations/001_category_hierarchy.sql أولًا.');
+    $name = cleanCategoryName($name);
+    if ($parentId < 0)
+        throw new RuntimeException('التصنيف الأب غير صالح.');
+    $parentValue = null;
+    if ($parentId > 0) {
+        if (categoryDepth($db, $parentId) < 1)
+            throw new RuntimeException('التصنيف الأب غير موجود.');
+        if (categoryDepth($db, $parentId) >= 3)
+            throw new RuntimeException('الحد الأقصى ثلاثة مستويات.');
+        $parentValue = $parentId;
+    }
+    if (run($db, 'SELECT id FROM categories WHERE parent_id <=> ? AND name=? LIMIT 1', [$parentValue, $name])->fetchColumn() !== false)
+        throw new RuntimeException('يوجد تصنيف بالاسم نفسه تحت هذا الأب بالفعل.');
+    $sortOrder = $parentValue === null
+        ? (int)$db->query('SELECT COALESCE(MAX(sort_order),0)+1 FROM categories WHERE parent_id IS NULL')->fetchColumn()
+        : (int)run($db, 'SELECT COALESCE(MAX(sort_order),0)+1 FROM categories WHERE parent_id=?', [$parentValue])->fetchColumn();
+    run($db, 'INSERT INTO categories (category_key,parent_id,name,sort_order) VALUES (?,?,?,?)', ['custom-' . bin2hex(random_bytes(12)), $parentValue, $name, $sortOrder]);
+    return (int)$db->lastInsertId();
+}
+function renameCategoryNode(PDO $db, int $categoryId, string $name): void
+{
+    if (!categorySchemaReady($db))
+        throw new RuntimeException('شغّل ملف database/migrations/001_category_hierarchy.sql أولًا.');
+    $name = cleanCategoryName($name);
+    $row = run($db, 'SELECT parent_id FROM categories WHERE id=?', [$categoryId])->fetch();
+    if (!$row)
+        throw new RuntimeException('التصنيف غير موجود.');
+    $parentValue = $row['parent_id'] === null ? null : (int)$row['parent_id'];
+    if (run($db, 'SELECT id FROM categories WHERE parent_id <=> ? AND name=? AND id<>? LIMIT 1', [$parentValue, $name, $categoryId])->fetchColumn() !== false)
+        throw new RuntimeException('يوجد تصنيف بالاسم نفسه تحت هذا الأب بالفعل.');
+    run($db, 'UPDATE categories SET name=? WHERE id=?', [$name, $categoryId]);
+}
+function deleteCategoryNode(PDO $db, int $categoryId): void
+{
+    if (!categorySchemaReady($db))
+        throw new RuntimeException('شغّل ملف database/migrations/001_category_hierarchy.sql أولًا.');
+    if (!run($db, 'SELECT id FROM categories WHERE id=?', [$categoryId])->fetchColumn())
+        throw new RuntimeException('التصنيف غير موجود.');
+    if ((int)run($db, 'SELECT COUNT(*) FROM categories WHERE parent_id=?', [$categoryId])->fetchColumn() > 0)
+        throw new RuntimeException('احذف التصنيفات التابعة أولًا، من المستوى الثالث إلى الأعلى.');
+    if ((int)run($db, 'SELECT COUNT(*) FROM product_categories WHERE category_id=?', [$categoryId])->fetchColumn() > 0)
+        throw new RuntimeException('انقل المنتجات إلى تصنيف آخر أو أزل تصنيفها قبل الحذف.');
+    run($db, 'DELETE FROM categories WHERE id=?', [$categoryId]);
+}
+function assignProductCategory(PDO $db, int $productId, int $categoryId): array
+{
+    if (!categorySchemaReady($db))
+        throw new RuntimeException('شغّل ملف database/migrations/001_category_hierarchy.sql أولًا.');
+    if ($categoryId < 0)
+        throw new RuntimeException('معرف التصنيف غير صالح.');
+    $db->beginTransaction();
+    try {
+        requireProduct($db, $productId);
+        if ($categoryId <= 0) {
+            run($db, 'DELETE FROM product_categories WHERE product_id=?', [$productId]);
+            $categoryId = 0;
+        } else {
+            if (categoryDepth($db, $categoryId) < 1 || categoryDepth($db, $categoryId) > 3)
+                throw new RuntimeException('التصنيف المحدد غير صالح.');
+            run($db, 'INSERT INTO product_categories (product_id,category_id) VALUES (?,?) ON DUPLICATE KEY UPDATE category_id=VALUES(category_id)', [$productId, $categoryId]);
+        }
+        $updated = run($db, 'UPDATE products SET version=version+1,updated_at=? WHERE id=? AND archived=0', [date('c'), $productId]);
+        if ($updated->rowCount() !== 1)
+            throw new RuntimeException('المنتج غير موجود أو تم نقله للأرشيف.');
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction())
+            $db->rollBack();
+        throw $e;
+    }
+    $rows = categoryRows($db);
+    $byId = [];
+    foreach ($rows as $row)
+        $byId[(int)$row['id']] = $row;
+    $version = (int)run($db, 'SELECT version FROM products WHERE id=?', [$productId])->fetchColumn();
+    return ['category_id' => $categoryId, 'category_path' => categoryPathFromId($categoryId, $byId), 'version' => $version];
+}
 function db(bool $serverOnly = false): PDO
 {
     global $config;
-    if ($config['driver'] === 'sqlite') {
-        $pdo = new PDO('sqlite:' . $config['sqlite_path']);
-        $pdo->exec('PRAGMA foreign_keys=ON');
-        $pdo->exec('PRAGMA busy_timeout=5000');
-    } else {
-        if (!preg_match('/^[a-zA-Z0-9_]+$/', $config['database']))
-            throw new RuntimeException('اسم قاعدة البيانات غير صالح.');
-        $dsn = 'mysql:host=' . $config['host'] . ';port=' . (int) $config['port'] . ($serverOnly ? '' : ';dbname=' . $config['database']) . ';charset=utf8mb4';
-        $pdo = new PDO($dsn, $config['username'], $config['password'], [
-            PDO::ATTR_TIMEOUT => 3,
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
-        ]);
-    }
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    if (!preg_match('/^[a-zA-Z0-9_]+$/', $config['database']))
+        throw new RuntimeException('اسم قاعدة البيانات غير صالح.');
+    $dsn = 'mysql:host=' . $config['host'] . ';port=' . (int) $config['port'] . ($serverOnly ? '' : ';dbname=' . $config['database']) . ';charset=utf8mb4';
+    $pdo = new PDO($dsn, $config['username'], $config['password'], [
+        PDO::ATTR_TIMEOUT => 3,
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
+    ]);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
     $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
     return $pdo;
@@ -113,52 +250,43 @@ function install(): void
 {
     global $config;
     $db = db(true);
-    if ($config['driver'] === 'mysql') {
-        $db->exec('CREATE DATABASE IF NOT EXISTS `' . $config['database'] . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
-        $db = db();
-        $sql = file_get_contents(__DIR__ . '/database/schema.sql');
-        foreach (explode(';', $sql) as $part)
-            if (trim($part) !== '' && !preg_match('/^\s*(CREATE DATABASE|USE )/i', $part))
-                $db->exec($part);
-        // Ensure verified column exists (for existing databases)
-        try {
-            $db->exec('ALTER TABLE products ADD COLUMN verified INT NOT NULL DEFAULT 0');
-        } catch (Throwable $e) {
-        }
-        try {
-            $db->exec('ALTER TABLE products ADD INDEX idx_verified (verified)');
-        } catch (Throwable $e) {
-        }
-    } else {
-        // Ensure SQLite directory exists
-        $sqliteDir = dirname($config['sqlite_path']);
-        if (!is_dir($sqliteDir))
-            mkdir($sqliteDir, 0755, true);
-        $db->exec('CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT,code TEXT NOT NULL DEFAULT "",brand TEXT NOT NULL DEFAULT "lufly",status TEXT NOT NULL DEFAULT "Running",description TEXT NOT NULL,notes TEXT NOT NULL,source_file TEXT NOT NULL DEFAULT "",source_row INTEGER NOT NULL DEFAULT 0,source_extra TEXT NOT NULL,archived INTEGER NOT NULL DEFAULT 0,verified INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)');
-        $db->exec('CREATE TABLE IF NOT EXISTS media (id INTEGER PRIMARY KEY AUTOINCREMENT,product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,path TEXT NOT NULL,original_name TEXT NOT NULL,kind TEXT NOT NULL,caption TEXT NOT NULL DEFAULT "",sort_order INTEGER NOT NULL DEFAULT 0,previewable INTEGER NOT NULL DEFAULT 1,source_column TEXT NOT NULL DEFAULT "",source_row INTEGER NOT NULL DEFAULT 0,sha256 TEXT NOT NULL DEFAULT "")');
-        $db->exec('CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY,value TEXT NOT NULL)');
-    }
-    $db->beginTransaction();
+    $db->exec('CREATE DATABASE IF NOT EXISTS `' . $config['database'] . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+    $db = db();
+    $sql = file_get_contents(__DIR__ . '/database/schema.sql');
+    if ($sql === false)
+        throw new RuntimeException('تعذر قراءة مخطط قاعدة البيانات.');
+    foreach (explode(';', $sql) as $part)
+        if (trim($part) !== '' && !preg_match('/^\s*(CREATE DATABASE|USE )/i', $part))
+            $db->exec($part);
+
+    // Add compatibility for existing MySQL schemas without changing their data.
     try {
-        if (setting($db, 'installed') === '1' || (int) $db->query('SELECT COUNT(*) FROM products')->fetchColumn() > 0)
-            throw new RuntimeException('تم التثبيت بالفعل. لن تتم إعادة استيراد أو استبدال بياناتك.');
-        $seed = json_decode(file_get_contents(__DIR__ . '/data/catalog.json'), true, 512, JSON_THROW_ON_ERROR);
-        $now = date('c');
-        foreach ($seed['products'] as $p)
-            run($db, 'INSERT INTO products (id,code,brand,status,description,notes,source_file,source_row,source_extra,verified,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [$p['id'], $p['code'], $p['brand'], $p['status'], $p['description'], $p['notes'], $p['source_file'], $p['source_row'], $p['source_extra'], 0, $now, $now]);
-        foreach ($seed['media'] as $m)
-            run($db, 'INSERT INTO media (id,product_id,path,original_name,kind,caption,sort_order,previewable,source_column,source_row,sha256) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [$m['id'], $m['product_id'], $m['path'], $m['original_name'], $m['kind'], $m['caption'], $m['sort_order'], (int) $m['previewable'], $m['source_column'], $m['source_row'], $m['sha256']]);
-        setSetting($db, 'installed', '1');
-        $db->commit();
+        $db->exec('ALTER TABLE products ADD COLUMN verified INT NOT NULL DEFAULT 0');
     } catch (Throwable $e) {
-        if ($db->inTransaction())
-            $db->rollBack();
-        throw $e;
+    }
+    try {
+        $db->exec('ALTER TABLE products ADD INDEX idx_verified (verified)');
+    } catch (Throwable $e) {
     }
 }
 function mediaFor(PDO $db, int $id): array
 {
     return run($db, 'SELECT * FROM media WHERE product_id=? ORDER BY sort_order,id', [$id])->fetchAll();
+}
+function mediaPathExists(string $path): bool
+{
+    $path = trim($path);
+    if ($path === '')
+        return false;
+    if (preg_match('~^https?://~i', $path))
+        return true;
+    $relativePath = ltrim(str_replace(chr(92), '/', $path), '/');
+    if ($relativePath === '' || in_array('..', explode('/', $relativePath), true) || in_array('.', explode('/', $relativePath), true))
+        return false;
+    $root = realpath(__DIR__);
+    $fullPath = realpath(__DIR__ . '/' . $relativePath);
+    return $root !== false && $fullPath !== false && is_file($fullPath)
+        && str_starts_with($fullPath, $root . DIRECTORY_SEPARATOR);
 }
 function uploadFiles(string $field = 'files'): array
 {
@@ -256,7 +384,18 @@ function saveProduct(PDO $db): int
 }
 function allProducts(PDO $db, bool $archived = false): array
 {
-    $rows = run($db, 'SELECT p.*, (SELECT COUNT(*) FROM media m WHERE m.product_id=p.id) AS media_count, (SELECT path FROM media m WHERE m.product_id=p.id AND m.previewable=1 ORDER BY CASE WHEN kind=\'photo\' THEN 0 ELSE 1 END,sort_order,id LIMIT 1) AS cover FROM products p WHERE archived=? ORDER BY id', [(int) $archived])->fetchAll();
+    $rows = run($db, 'SELECT p.*, (SELECT COUNT(*) FROM media m WHERE m.product_id=p.id) AS media_count FROM products p WHERE archived=? ORDER BY id', [(int) $archived])->fetchAll();
+    $categoryByProduct = [];
+    $categoryById = [];
+    $categoryReady = categorySchemaReady($db);
+    if ($rows && $categoryReady) {
+        foreach (categoryRows($db) as $category)
+            $categoryById[(int)$category['id']] = $category;
+        $productIds = array_map(fn($row) => (int)$row['id'], $rows);
+        $placeholders = implode(',', array_fill(0, count($productIds), '?'));
+        foreach (run($db, "SELECT product_id,category_id FROM product_categories WHERE product_id IN ($placeholders)", $productIds)->fetchAll() as $assignment)
+            $categoryByProduct[(int)$assignment['product_id']] = (int)$assignment['category_id'];
+    }
     $counts = [];
     foreach ($rows as $p) {
         $key = strtoupper(trim($p['code']));
@@ -267,6 +406,9 @@ function allProducts(PDO $db, bool $archived = false): array
         $p['group'] = groupCode($p['code']);
         $p['duplicate'] = $p['code'] !== '' && ($counts[strtoupper(trim($p['code']))] ?? 0) > 1;
         $p['incomplete'] = trim($p['code']) === '' || trim($p['description']) === '' || !(int) $p['media_count'];
+        $p['category_ready'] = $categoryReady;
+        $p['category_id'] = $categoryByProduct[(int)$p['id']] ?? 0;
+        $p['category_path'] = categoryPathFromId((int)$p['category_id'], $categoryById);
     }
     unset($p);
     return $rows;
